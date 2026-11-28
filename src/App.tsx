@@ -29,14 +29,14 @@ import WorkspaceNavigationBar from './components/WorkspaceNavigationBar';
 import FirstRunWizard from './components/FirstRunWizard';
 import { ttfm } from './lib/ttfm';
 import CompileConfirmationModal, { type DeployChecklistRow } from './components/CompileConfirmationModal';
-import AIScriptEditor from './components/AIScriptEditor';
-import LibraryConfigurator from './components/LibraryConfigurator';
-import XMLPatchSystem from './components/XMLPatchSystem';
-import ProjectInspector from './components/ProjectInspector';
-import GalaxyMapView from './components/GalaxyMapView';
-import ContractEditor from './components/ContractEditor';
-import TFileEditor from './components/TFileEditor';
-import WikiBrowser from './components/WikiBrowser';
+const AIScriptEditor = React.lazy(() => import('./components/AIScriptEditor'));
+const LibraryConfigurator = React.lazy(() => import('./components/LibraryConfigurator'));
+const XMLPatchSystem = React.lazy(() => import('./components/XMLPatchSystem'));
+const ProjectInspector = React.lazy(() => import('./components/ProjectInspector'));
+const GalaxyMapView = React.lazy(() => import('./components/GalaxyMapView'));
+const ContractEditor = React.lazy(() => import('./components/ContractEditor'));
+const TFileEditor = React.lazy(() => import('./components/TFileEditor'));
+const WikiBrowser = React.lazy(() => import('./components/WikiBrowser'));
 import GlobalSearch from './components/GlobalSearch';
 import ShortcutsOverlay from './components/ShortcutsOverlay';
 import { ModWorkspace, MDNode, UIWidget, PRESETS, NODE_TEMPLATES, sanitizeWorkspace, generateMDXML, validateModWorkspace, ChatMessage, PackageDiagnostic } from './types';
@@ -610,10 +610,14 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     };
   }, [workspace, mdCode, setWorkspace]);
 
+  const graphDiagnostics = React.useMemo(
+    () => validateModWorkspace(workspace, mdCode),
+    [workspace, mdCode]
+  );
+
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    const localReports = validateModWorkspace(workspace, mdCode);
 
     const timer = window.setTimeout(async () => {
       try {
@@ -644,7 +648,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
         if (controller.signal.aborted) return;
         console.warn('Full project validation unavailable; falling back to local MD diagnostics:', err);
         if (!cancelled) {
-          setDiagnostics(localReports);
+          setDiagnostics(graphDiagnostics);
           setValidationDelta(null);
           setProjectAdditiveGuard(null);
           setDiagnosticInput({ workspace, revision: diagnosticRevision, source: 'local' });
@@ -657,7 +661,7 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [workspace, mdCode, diagnosticRevision]);
+  }, [workspace, mdCode, diagnosticRevision, graphDiagnostics]);
 
   const readinessWorkspaceHash = React.useMemo(
     () => workspaceContentHash(sanitizeWorkspace(workspace)),
@@ -689,10 +693,6 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
     onError: error => setReadinessWatcher({ phase: 'error', error: error.message || 'Readiness evidence unavailable.' }),
   });
 
-  const graphDiagnostics = React.useMemo(
-    () => validateModWorkspace(workspace, mdCode),
-    [workspace, mdCode]
-  );
   const effectiveDiagnostics = diagnostics;
   const readinessStages = React.useMemo(() => buildReadinessStages({
     workspaceName: workspace.name,
@@ -2217,11 +2217,12 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
 
   // B1: adopt the server workspace explicitly (badge click) — the user's choice, never silent.
   const sourceStampDir = workspace.sourceStamp?.dir || '';
+  const sourceStampHash = workspace.sourceStamp?.hash || '';
   useEffect(() => {
     setSourceSync(null);
     setDismissedDiskHash(null);
     lastFailedAutoReloadHashRef.current = null;
-  }, [currentWorkspaceId, sourceStampDir]);
+  }, [currentWorkspaceId, sourceStampDir, sourceStampHash]);
 
   const checkSourceSyncNow = React.useCallback(async () => {
     if (!sourceStampDir) return;
@@ -3473,25 +3474,25 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
               modWorkspacePath={modWorkspacePath}
               filesystemPath={filesystemPath}
             />
-          ) : workspaceView === 'ui-designer' ? (
+          ) : (
             <React.Suspense
               fallback={
                 <div className="flex-1 flex items-center justify-center bg-[#0c0e12] text-xs text-[#a0aab8]">
-                  Loading HUD &amp; Lua UI Workbench…
+                  Loading Workbench Module…
                 </div>
               }
             >
-              <UIBuilder
-                workspace={workspace}
-                setWorkspace={setWorkspace}
-                selectedWidget={selectedWidget}
-                setSelectedWidget={setSelectedWidget}
-                x4UiVerification={x4UiVerification}
-                onConfirmX4UiVerification={confirmCurrentX4UiExperience}
-                onX4UiVerificationSnapshotChange={setX4UiVerificationSnapshot}
-              />
-            </React.Suspense>
-          ) : workspaceView === 'aiscripts' ? (
+              {workspaceView === 'ui-designer' ? (
+                <UIBuilder
+                  workspace={workspace}
+                  setWorkspace={setWorkspace}
+                  selectedWidget={selectedWidget}
+                  setSelectedWidget={setSelectedWidget}
+                  x4UiVerification={x4UiVerification}
+                  onConfirmX4UiVerification={confirmCurrentX4UiExperience}
+                  onX4UiVerificationSnapshotChange={setX4UiVerificationSnapshot}
+                />
+              ) : workspaceView === 'aiscripts' ? (
             <AIScriptEditor
               workspace={workspace}
               setWorkspace={setWorkspace}
@@ -3569,6 +3570,8 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
                 setRawWorkspace(nextWorkspace);
               }}
             />
+              )}
+            </React.Suspense>
           )}
 
           {experienceMode === 'expert' && (
@@ -3726,7 +3729,8 @@ export default function App({ bootstrapWorkspace }: { bootstrapWorkspace?: Works
           setSelectedNodeIds([]);
           setActiveMdScript(null);
           nativeSelectionOpenKeyRef.current = '';
-          void checkSourceSyncNow();
+          setSourceSync(null);
+          setDismissedDiskHash(null);
         }}
       />
 

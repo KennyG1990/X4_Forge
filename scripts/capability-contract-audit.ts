@@ -5759,6 +5759,72 @@ function projectionHost(relative: string): ProjectionHost | null {
   return null;
 }
 
+function topLevelReactLazyDefaultImports(
+  file: ts.SourceFile,
+): Array<{ name: string; specifier: string; declaration: ts.VariableDeclaration }> {
+  const imports: Array<{ name: string; specifier: string; declaration: ts.VariableDeclaration }> = [];
+  for (const statement of file.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!variableDeclarationIsConst(declaration) || !ts.isIdentifier(declaration.name) ||
+        !/^[A-Z]/.test(declaration.name.text) || !declaration.initializer) continue;
+      const name = declaration.name.text;
+      const declarations = runtimeBindingDeclarations(file, name);
+      if (declarations.length !== 1 || declarations[0] !== declaration || runtimeBindingIsWritten(file, name)) continue;
+      const lazyCall = unwrapProjectionExpression(declaration.initializer);
+      if (!ts.isCallExpression(lazyCall) || lazyCall.arguments.length !== 1) continue;
+      const callee = unwrapProjectionExpression(lazyCall.expression);
+      const isReactLazy =
+        (ts.isIdentifier(callee) && packageNamedImportMatches(file, callee.text, 'react', 'lazy', callee)) ||
+        (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.name.text === 'lazy' &&
+          packageNamespaceImportMatches(file, callee.expression.text, 'react', callee.expression));
+      if (!isReactLazy) continue;
+      const factory = unwrapProjectionExpression(lazyCall.arguments[0]);
+      if ((!ts.isArrowFunction(factory) && !ts.isFunctionExpression(factory)) || factory.parameters.length !== 0) continue;
+      const isAsync = (ts.getModifiers(factory) || []).some(modifier => modifier.kind === ts.SyntaxKind.AsyncKeyword);
+      if (isAsync) continue;
+      const bodyExpression = !ts.isBlock(factory.body)
+        ? factory.body
+        : factory.body.statements.length === 1 && ts.isReturnStatement(factory.body.statements[0]) &&
+            factory.body.statements[0].expression
+          ? factory.body.statements[0].expression
+          : null;
+      if (!bodyExpression) continue;
+      const dynamicImport = unwrapProjectionExpression(bodyExpression);
+      if (!ts.isCallExpression(dynamicImport) || dynamicImport.expression.kind !== ts.SyntaxKind.ImportKeyword ||
+        dynamicImport.arguments.length !== 1 || !ts.isStringLiteralLike(dynamicImport.arguments[0])) continue;
+      imports.push({ name, specifier: dynamicImport.arguments[0].text, declaration });
+    }
+  }
+  return imports;
+}
+
+function lazyComponentIsRenderedInFile(
+  file: ts.SourceFile,
+  name: string,
+  declaration: ts.VariableDeclaration,
+): boolean {
+  const declStart = declaration.getStart(file);
+  const declEnd = declaration.getEnd();
+  return visitUntil(file, candidate => {
+    if (!ts.isIdentifier(candidate) || candidate.text !== name) return false;
+    if (candidate.getStart(file) >= declStart && candidate.getEnd() <= declEnd) return false;
+    const parent = candidate.parent;
+    if (!(ts.isJsxOpeningElement(parent) || ts.isJsxSelfClosingElement(parent)) || parent.tagName !== candidate) return false;
+    if (nodeIsStaticallyDead(parent) || !expressionFlowsToRenderedOutput(parent, file)) return false;
+    const owner = enclosingNamedFunctionOwner(parent);
+    if (!owner) return true;
+    if (exportedOwnerIdentity(owner) !== null) return true;
+    const ownerStart = owner.declaration.getStart(file);
+    const ownerEnd = owner.declaration.getEnd();
+    return visitUntil(file, ref =>
+      ts.isIdentifier(ref) && ref.text === owner.name &&
+      (ref.getStart(file) < ownerStart || ref.getEnd() > ownerEnd) &&
+      !nodeIsStaticallyDead(ref),
+    );
+  });
+}
+
 function staticProjectionModuleSpecifiers(file: ts.SourceFile): string[] {
   const specifiers: string[] = [];
   for (const statement of file.statements) {
@@ -5772,6 +5838,11 @@ function staticProjectionModuleSpecifiers(file: ts.SourceFile): string[] {
       !statement.isTypeOnly && !(statement.exportClause && ts.isNamedExports(statement.exportClause) &&
         statement.exportClause.elements.length > 0 && statement.exportClause.elements.every(element => element.isTypeOnly))) {
       specifiers.push(statement.moduleSpecifier.text);
+    }
+  }
+  for (const lazyImport of topLevelReactLazyDefaultImports(file)) {
+    if (lazyComponentIsRenderedInFile(file, lazyImport.name, lazyImport.declaration)) {
+      specifiers.push(lazyImport.specifier);
     }
   }
   return specifiers;
@@ -6185,6 +6256,13 @@ function exportedRuntimeConsumer(
         for (const element of statement.exportClause.elements) {
           if (!element.isTypeOnly && (element.propertyName?.text || element.name.text) === exportIdentity &&
             exportedRuntimeConsumer(importerRelative, element.name.text, host, seenOwners, nextExports)) return true;
+        }
+      }
+    }
+    if (exportIdentity === 'default') {
+      for (const lazyEntry of topLevelReactLazyDefaultImports(importer)) {
+        if (resolveLocalSource(ROOT, importerRelative, lazyEntry.specifier) === target) {
+          references.identifiers.set(lazyEntry.name, lazyEntry.declaration);
         }
       }
     }
@@ -7966,8 +8044,18 @@ function audit(manifestOverride?: RouteDispositionManifest): {
 
     fs.mkdirSync(path.join(routeClosureProbeRoot, 'src', 'projection'), { recursive: true });
     fs.writeFileSync(path.join(routeClosureProbeRoot, 'src', 'main.tsx'), `
+      import React from 'react';
       import type { Unused } from './projection/unused';
       import './projection/barrel';
+      import './projection/shadowedLazy';
+      const LazyLive = React.lazy(() => import('./projection/lazyLive'));
+      const LazyUnused = React.lazy(() => import('./projection/lazyUnused'));
+      const LazyDead = React.lazy(() => import('./projection/lazyDead'));
+      export default function Root() {
+        if (false) return <LazyDead />;
+        return <LazyLive />;
+      }
+      function deadFn() { return <LazyDead />; }
       function neverCalled() { return import('./projection/dynamic'); }
     `, 'utf8');
     fs.writeFileSync(path.join(routeClosureProbeRoot, 'src', 'projection', 'barrel.ts'), `
@@ -7975,6 +8063,15 @@ function audit(manifestOverride?: RouteDispositionManifest): {
       export { live } from './live';
     `, 'utf8');
     fs.writeFileSync(path.join(routeClosureProbeRoot, 'src', 'projection', 'live.ts'), `export const live = true;\n`, 'utf8');
+    fs.writeFileSync(path.join(routeClosureProbeRoot, 'src', 'projection', 'lazyLive.ts'), `export default function LazyLive() { return null; }\n`, 'utf8');
+    fs.writeFileSync(path.join(routeClosureProbeRoot, 'src', 'projection', 'lazyUnused.ts'), `export default function LazyUnused() { return null; }\n`, 'utf8');
+    fs.writeFileSync(path.join(routeClosureProbeRoot, 'src', 'projection', 'lazyDead.ts'), `export default function LazyDead() { return null; }\n`, 'utf8');
+    fs.writeFileSync(path.join(routeClosureProbeRoot, 'src', 'projection', 'lazyShadowed.ts'), `export default function LazyShadowed() { return null; }\n`, 'utf8');
+    fs.writeFileSync(path.join(routeClosureProbeRoot, 'src', 'projection', 'shadowedLazy.tsx'), `
+      const React = { lazy: (fn: unknown) => fn };
+      const Fake = React.lazy(() => import('./lazyShadowed')) as unknown as () => null;
+      export default function Shadowed() { return <Fake />; }
+    `, 'utf8');
     fs.writeFileSync(path.join(routeClosureProbeRoot, 'src', 'projection', 'unused.ts'), `export interface Unused { value: string }\n`, 'utf8');
     fs.writeFileSync(path.join(routeClosureProbeRoot, 'src', 'projection', 'dynamic.ts'), `fetch('/api/agent/workspace');\n`, 'utf8');
     fs.mkdirSync(path.join(routeClosureProbeRoot, 'vscode-extension', 'src'), { recursive: true });
@@ -7983,6 +8080,10 @@ function audit(manifestOverride?: RouteDispositionManifest): {
     const reachableProjectionModules = discoverProjectionReachableModules(routeClosureProbeRoot, ['src/main.tsx']);
     const reachableNativeModules = discoverProjectionReachableModules(routeClosureProbeRoot, ['vscode-extension/src/extension.ts']);
     if (!reachableProjectionModules.has('src/projection/barrel.ts') || !reachableProjectionModules.has('src/projection/live.ts') ||
+      !reachableProjectionModules.has('src/projection/lazyLive.ts') ||
+      reachableProjectionModules.has('src/projection/lazyUnused.ts') ||
+      reachableProjectionModules.has('src/projection/lazyDead.ts') ||
+      reachableProjectionModules.has('src/projection/lazyShadowed.ts') ||
       reachableProjectionModules.has('src/projection/unused.ts') ||
       reachableProjectionModules.has('src/projection/dynamic.ts') || reachableProjectionModules.has('vscode-extension/src/native.ts') ||
       !reachableNativeModules.has('vscode-extension/src/native.ts') || reachableNativeModules.has('src/projection/live.ts')) {

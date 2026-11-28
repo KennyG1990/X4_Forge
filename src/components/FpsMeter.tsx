@@ -115,7 +115,7 @@ export default function FpsMeter({ variant = 'docked' }: FpsMeterProps) {
         style={{ color }}
       >
         <span className="inline-flex items-center gap-1.5">
-          <span aria-hidden="true" className="text-[9px]">●</span>
+          <span aria-hidden="true" className="w-1.5 h-1.5 rounded-full bg-current" />
           <span>{fps} FPS</span>
         </span>
         {longtaskMs > 0 && (

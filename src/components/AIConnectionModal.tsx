@@ -6,13 +6,13 @@
 import React, { useState, useEffect } from 'react';
 import {
   Sparkles,
-  X,
   Key,
   Check,
   ShieldCheck,
   Layers,
   Cpu
 } from 'lucide-react';
+import { ModalShell } from './ui';
 import {
   AIProviderId,
   AI_PROVIDERS,
@@ -291,42 +291,32 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4 font-mono text-xs">
-      <div className="w-full max-w-[580px] bg-[#0c0f16] border border-[#df9825]/50 rounded-xl shadow-2xl flex flex-col overflow-hidden text-slate-300">
-        
-        {/* Modal Header */}
-        <div className="bg-[#df9825]/10 border-b border-[#df9825]/20 p-4 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Sparkles className="w-4 h-4 text-[#df9825] animate-pulse" />
-            <span className="font-bold text-[#df9825] tracking-wider uppercase text-sm">AI PROVIDER SELECTION & OAUTH</span>
-          </div>
-          <button 
-            onClick={onClose}
-            className="p-1 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-all cursor-pointer"
-          >
-            <X className="w-4.5 h-4.5" />
-          </button>
-        </div>
-
-        {/* Modal Outer Container */}
-        <div className="p-5 flex-1 overflow-y-auto max-h-[75vh] space-y-5.5">
-          
+    <ModalShell
+      dataTestId="ai-connection-modal"
+      title="AI Provider & OAuth"
+      subtitle="Connect Google OAuth or store personal API keys locally"
+      icon={<Sparkles className="w-4 h-4 text-amber-400" />}
+      borderTone="amber"
+      maxWidthClass="max-w-[600px]"
+      onClose={onClose}
+      bodyClassName="min-h-0 flex-1 overflow-y-auto custom-scrollbar p-5 space-y-5 font-mono text-xs text-slate-300"
+    >
           {/* Security Banner Info */}
-          <div className="bg-cyan-950/20 border border-cyan-500/20 rounded-lg p-3 text-[11px] leading-relaxed flex gap-3 text-cyan-300/90 font-sans">
-            <ShieldCheck className="w-5 h-5 shrink-0 text-cyan-400" />
+          <div className="bg-sky-950/25 border border-sky-500/25 rounded-lg p-3 text-[11px] leading-relaxed flex gap-3 text-sky-200/90 font-sans">
+            <ShieldCheck className="w-5 h-5 shrink-0 text-sky-400" />
             <div>
-              <span className="font-bold text-cyan-200 block mb-0.5">Secure Isolated Credentials</span>
-              To prevent general system quota limits (429 Rate Limits / High Demand), you can configure your own personal developer key or sign in to verify your identity. All keys are encrypted entirely on-the-fly and kept in your secure sandboxed browser storage.
+              <span className="font-semibold text-sky-100 block mb-0.5">Secure Isolated Credentials</span>
+              To prevent general system quota limits (429 rate limits / high demand), you can configure a personal developer key or sign in with OAuth. Personal API keys are transmitted to your write-only local Forge server instead of plaintext browser storage.
             </div>
           </div>
 
           {/* User Google Account Connection Box */}
-          <div className="bg-slate-900/40 border border-white/5 rounded-lg p-4 space-y-3">
+          <div className="bg-slate-900/40 border border-white/10 rounded-lg p-4 space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Google OAuth Account Status</span>
-              <div className="flex items-center gap-1.5 font-mono text-[9px] text-[#df9825]">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span>AUTHENTICATOR ONLINE</span>
+              <span className="text-[11px] text-slate-300 font-semibold">Google OAuth Account Status</span>
+              <div className="flex items-center gap-1.5 font-mono text-[11px] text-amber-300">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                <span>Authenticator ready</span>
               </div>
             </div>
 
@@ -338,13 +328,13 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                   </div>
                   <div>
                     <div className="text-white text-xs font-bold leading-none">{googleUser.name}</div>
-                    <div className="text-[10px] text-slate-400 mt-1">{googleUser.email}</div>
+                    <div className="text-[11px] text-slate-400 mt-1">{googleUser.email}</div>
                   </div>
                 </div>
                 <button
                   type="button"
                   onClick={handleDisconnectGoogle}
-                  className="px-2.5 py-1 text-[10px] font-mono border border-red-500/40 text-red-400 hover:bg-red-500/10 rounded transition-all cursor-pointer"
+                  className="px-2.5 py-1 text-[11px] font-mono border border-rose-500/40 text-rose-300 hover:bg-rose-500/10 rounded transition-all cursor-pointer"
                 >
                   Disconnect
                 </button>
@@ -363,7 +353,7 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                   {oauthLoading ? (
                     <span className="w-3.5 h-3.5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></span>
                   ) : (
-                    <span className="w-3.5 h-3.5 bg-red-500 rounded-full flex items-center justify-center text-[10px] text-white">G</span>
+                    <span className="w-3.5 h-3.5 bg-red-500 rounded-full flex items-center justify-center text-[11px] text-white">G</span>
                   )}
                   {oauthLoading ? 'Establishing connection...' : 'Sign in with Google Account'}
                 </button>
@@ -374,7 +364,7 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
           <form onSubmit={handleSaveKeys} className="space-y-4">
             {/* Active Provider Chooser Row */}
             <div className="space-y-2">
-              <label className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Select Active AI Modeling Engine</label>
+              <label className="text-[11px] text-slate-300 font-semibold">Select Active AI Modeling Engine</label>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
                 {AI_PROVIDERS.map((provider) => {
                   const isActive = activeProviderState === provider.id;
@@ -385,20 +375,20 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                       key={provider.id}
                       type="button"
                       onClick={() => setActiveProviderState(provider.id)}
-                      className={`p-3 text-left rounded-lg bg-black/40 border flex flex-col justify-between transition-all cursor-pointer group hover:bg-[#df9825]/5 ${
+                      className={`p-3 text-left rounded-lg bg-black/40 border flex flex-col justify-between transition-all cursor-pointer group hover:bg-amber-500/[0.06] ${
                         isActive 
-                          ? 'border-[#df9825] bg-[#df9825]/5 shadow-lg' 
+                          ? 'border-amber-500/70 bg-amber-500/[0.08] shadow-lg' 
                           : 'border-white/15'
                       }`}
                     >
                       <div className="flex items-center justify-between w-full">
-                        <span className={`font-bold uppercase text-[10px] group-hover:text-[#df9825] ${isActive ? 'text-[#df9825]' : 'text-slate-200'}`}>
+                        <span className={`font-semibold text-xs group-hover:text-amber-300 ${isActive ? 'text-amber-300' : 'text-slate-200'}`}>
                           {provider.id === 'gemini' ? 'Gemini' : provider.id === 'claude' ? 'Claude' : provider.id === 'openai' ? 'OpenAI' : 'OpenRouter'}
                         </span>
-                        {isActive && <Check className="w-3.5 h-3.5 text-[#df9825]" />}
+                        {isActive && <Check className="w-3.5 h-3.5 text-amber-400" />}
                       </div>
                       
-                      <div className="mt-3 flex items-center justify-between text-[8px] text-slate-400 tracking-wide uppercase font-mono">
+                      <div className="mt-3 flex items-center justify-between text-[11px] text-slate-400 font-mono">
                         <span>Config:</span>
                         {isConfigured ? (
                           <span className="text-emerald-400 font-bold">Custom Key</span>
@@ -417,17 +407,17 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
             {/* Provider Settings Panel info */}
             <div className="bg-[#121620] border border-white/10 rounded-lg p-3.5 space-y-3.5">
               <div className="space-y-1">
-                <span className="font-bold text-[#df9825] text-[11px] uppercase">
+                <span className="font-semibold text-amber-300 text-xs">
                   {AI_PROVIDERS.find(p => p.id === activeProviderState)?.name} Settings
                 </span>
-                <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
+                <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
                   {AI_PROVIDERS.find(p => p.id === activeProviderState)?.description}
                 </p>
               </div>
 
               {/* API Key input box */}
               <div className="space-y-1.5">
-                <div className="flex justify-between items-center text-[10px]">
+                <div className="flex justify-between items-center text-[11px]">
                   <label className="text-slate-300 font-bold flex items-center gap-1.5">
                     <Key className="w-3 h-3 text-slate-400" />
                     Personal API Token / Developer Key
@@ -435,7 +425,7 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                   <button
                     type="button"
                     onClick={() => setShowKeyVisible(prev => ({ ...prev, [activeProviderState]: !prev[activeProviderState] }))}
-                    className="text-[9px] hover:text-[#df9825] text-slate-400 underline font-sans"
+                    className="text-[11px] hover:text-amber-300 text-slate-400 underline font-sans"
                   >
                     {showKeyVisible[activeProviderState] ? 'Hide' : 'Reveal'}
                   </button>
@@ -448,10 +438,10 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                   placeholder={keyConfigured[activeProviderState]
                     ? '●●●●●●●● configured (stored on the server) — type to replace'
                     : AI_PROVIDERS.find(p => p.id === activeProviderState)?.placeholderKey}
-                  className="w-full bg-black border border-white/10 rounded focus:border-[#df9825] p-2 text-slate-200 text-[11px] font-mono focus:outline-none"
+                  className="w-full bg-black border border-white/10 rounded focus:border-amber-400 p-2 text-slate-200 text-[11px] font-mono focus:outline-none"
                 />
 
-                <p className="text-[9px] text-slate-500 leading-normal font-sans pt-1">
+                <p className="text-[11px] text-slate-400 leading-normal font-sans pt-1">
                   {activeProviderState === 'gemini' ? (
                     <span>If left blank, the browser will seamlessly fallback to your project's shared developer limits.</span>
                   ) : (
@@ -465,7 +455,7 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                 {activeProviderState === 'openrouter' ? (
                   /* Dynamic OpenRouter Model Discovery Engine */
                   <div className="space-y-3">
-                    <div className="flex justify-between items-center text-[10.5px]">
+                    <div className="flex justify-between items-center text-[11px]">
                       <label className="text-slate-300 font-bold flex items-center gap-1.5">
                         <Cpu className="w-3.5 h-3.5 text-emerald-400" />
                         OpenRouter Registry Engine
@@ -497,18 +487,18 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                           value={orSearch}
                           onChange={(e) => setOrSearch(e.target.value)}
                           placeholder="Search OpenRouter models (e.g. deepseek, claude)..."
-                          className="flex-1 bg-black text-slate-200 border border-white/10 rounded px-2.5 py-1.5 text-[11px] font-mono focus:outline-none focus:border-[#df9825]"
+                          className="flex-1 bg-black text-slate-200 border border-white/10 rounded px-2.5 py-1.5 text-[11px] font-mono focus:outline-none focus:border-amber-400"
                         />
                       </div>
 
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
                         {/* Sort Dropdown */}
                         <div className="flex items-center gap-1.5 justify-between">
-                          <span className="text-[9px] text-slate-500 uppercase font-bold shrink-0">Sort:</span>
+                          <span className="text-[11px] text-slate-400 font-medium shrink-0">Sort:</span>
                           <select
                             value={orSort}
                             onChange={(e) => setOrSort(e.target.value as any)}
-                            className="bg-black text-slate-300 border border-white/10 rounded px-1.5 py-1 text-[10px] focus:outline-none focus:border-[#df9825] cursor-pointer flex-1"
+                            className="bg-black text-slate-300 border border-white/10 rounded px-2 py-1 text-[11px] focus:outline-none focus:border-amber-400 cursor-pointer flex-1"
                           >
                             <option value="rank">Popular Rank</option>
                             <option value="id">Alphabetical</option>
@@ -519,11 +509,11 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
 
                         {/* Filter Dropdown */}
                         <div className="flex items-center gap-1.5 justify-between">
-                          <span className="text-[9px] text-slate-500 uppercase font-bold shrink-0">Filter:</span>
+                          <span className="text-[11px] text-slate-400 font-medium shrink-0">Filter:</span>
                           <select
                             value={orFilter}
                             onChange={(e) => setOrFilter(e.target.value as any)}
-                            className="bg-black text-slate-300 border border-white/10 rounded px-1.5 py-1 text-[10px] focus:outline-none focus:border-[#df9825] cursor-pointer flex-1"
+                            className="bg-black text-slate-300 border border-white/10 rounded px-2 py-1 text-[11px] focus:outline-none focus:border-amber-400 cursor-pointer flex-1"
                           >
                             <option value="all">All Models</option>
                             <option value="coding">Coding/Instruct</option>
@@ -540,7 +530,7 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                             type="button"
                             onClick={() => setOrReasoningToggle(!orReasoningToggle)}
                             className={`w-8 h-4 rounded-full p-0.5 transition-colors cursor-pointer flex items-center ${
-                              orReasoningToggle ? 'bg-[#df9825]' : 'bg-slate-700 border border-white/15'
+                              orReasoningToggle ? 'bg-amber-400' : 'bg-slate-700 border border-white/15'
                             }`}
                           >
                             <div className={`w-3 h-3 rounded-full bg-black transition-transform transform ${
@@ -572,19 +562,19 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                               }}
                               className={`w-full text-left p-2.5 transition-all outline-none flex items-center justify-between text-[11px] font-mono leading-relaxed cursor-pointer ${
                                 isSelected 
-                                  ? 'bg-[#df9825]/10 border-l-2 border-[#df9825] text-[#df9825] font-semibold' 
+                                  ? 'bg-amber-500/12 border-l-2 border-amber-400 text-amber-300 font-semibold' 
                                   : 'hover:bg-white/5 text-slate-300'
                               }`}
                             >
                               <div className="flex flex-col gap-0.5 max-w-[70%]">
-                                <span className={isSelected ? 'text-[#df9825]' : 'text-slate-200'}>{m.id}</span>
-                                <span className="text-[9px] text-slate-500 font-sans truncate">{m.name}</span>
+                                <span className={isSelected ? 'text-amber-300' : 'text-slate-200'}>{m.id}</span>
+                                <span className="text-[11px] text-slate-400 font-sans truncate">{m.name}</span>
                               </div>
-                              <div className="text-right flex flex-col shrink-0 text-[10px] text-slate-400 font-sans">
-                                <span className="font-mono text-[9px] font-bold text-emerald-400">
+                              <div className="text-right flex flex-col shrink-0 text-[11px] text-slate-400 font-sans">
+                                <span className="font-mono text-[11px] font-bold text-emerald-400">
                                   {parseFloat(m.prompt) === 0 && parseFloat(m.completion) === 0 ? 'FREE' : `$${parseFloat(m.prompt).toFixed(2)}/$${parseFloat(m.completion).toFixed(2)}`}
                                 </span>
-                                <span className="text-[9.5px] font-mono text-slate-500 uppercase font-bold shrink-0">{(m.context / 1000).toFixed(0)}k ctx</span>
+                                <span className="text-[11px] font-mono text-slate-400 font-medium shrink-0">{(m.context / 1000).toFixed(0)}k ctx</span>
                               </div>
                             </button>
                           );
@@ -598,8 +588,8 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
 
                     {/* Model description footer */}
                     <div className="bg-black/50 border border-white/5 rounded-lg p-2.5 min-h-[50px] animate-fade-in flex flex-col gap-0.5">
-                      <span className="text-[8px] text-slate-500 block font-bold uppercase tracking-wide">Model Description / Capabilities</span>
-                      <p className="text-[10.5px] text-slate-400 font-sans leading-relaxed">
+                      <span className="text-[11px] text-slate-300 block font-semibold">Model Description / Capabilities</span>
+                      <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
                         {orSelectedDescription || (customModelTexts.openrouter ? orModels.find(m => m.id === customModelTexts.openrouter)?.description : '') || "Explore a model above to view descriptions and detailed parameter capabilities."}
                       </p>
                     </div>
@@ -607,12 +597,12 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                 ) : (
                   /* Standard Preconfigured Dropdown Layout */
                   <div className="space-y-1.5">
-                    <div className="flex justify-between items-center text-[10px]">
+                    <div className="flex justify-between items-center text-[11px]">
                       <label className="text-slate-300 font-bold flex items-center gap-1.5">
                         <Cpu className="w-3.5 h-3.5 text-emerald-400" />
                         Cognitive Model Selection
                       </label>
-                      <span className="text-[8.5px] text-[#df9825] uppercase tracking-wider font-mono">FULLY ENABLING {activeProviderState.toUpperCase()}</span>
+                      <span className="text-[11px] text-amber-300 font-mono">Provider: {activeProviderState}</span>
                     </div>
                     
                     <select
@@ -622,7 +612,7 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                         setSelectedModels(prev => ({ ...prev, [activeProviderState]: val }));
                         setIsCustomModel(prev => ({ ...prev, [activeProviderState]: val === 'custom' }));
                       }}
-                      className="w-full bg-black border border-white/10 rounded focus:border-[#df9825] p-2 text-slate-200 text-[11px] font-mono focus:outline-none cursor-pointer"
+                      className="w-full bg-black border border-white/10 rounded focus:border-amber-400 p-2 text-slate-200 text-[11px] font-mono focus:outline-none cursor-pointer"
                     >
                       {PRECONFIGURED_MODELS[activeProviderState]?.map((m) => (
                         <option key={m.value} value={m.value} className="bg-[#0c0f16]">
@@ -640,9 +630,9 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                           value={customModelTexts[activeProviderState]}
                           onChange={(e) => setCustomModelTexts(prev => ({ ...prev, [activeProviderState]: e.target.value }))}
                           placeholder="e.g. gemini-3.5-flash-high, gpt-5.5, claude-4.6-thinking"
-                          className="w-full bg-black border border-[#df9825]/40 rounded focus:border-[#df9825] p-2 text-slate-200 text-[11px] font-mono focus:outline-none"
+                          className="w-full bg-black border border-amber-500/40 rounded focus:border-amber-400 p-2 text-slate-200 text-[11px] font-mono focus:outline-none"
                         />
-                        <p className="text-[8.5px] text-[#df9825]/75 leading-normal font-sans pt-1">
+                        <p className="text-[11px] text-amber-300/80 leading-normal font-sans pt-1">
                           Type any custom model identifier supported by your API provider. Works with any new or reasoning model!
                         </p>
                       </div>
@@ -652,13 +642,13 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
 
                 {/* Reasoning Level Selector */}
                 <div className="space-y-2">
-                  <div className="flex justify-between items-center text-[10px]">
+                  <div className="flex justify-between items-center text-[11px]">
                     <label className="text-slate-300 font-bold flex items-center gap-1.5">
-                      <Layers className="w-3.5 h-3.5 text-[#df9825]" />
+                      <Layers className="w-3.5 h-3.5 text-amber-400" />
                       Reasoning Effort / Thinking Budget
                     </label>
-                    <span className="text-[8px] text-slate-500 uppercase font-mono bg-white/5 px-1 py-0.5 rounded">
-                      Value: {reasoningLevels[activeProviderState].toUpperCase()}
+                    <span className="text-[11px] text-slate-400 font-mono bg-white/5 px-1.5 py-0.5 rounded">
+                      Value: {reasoningLevels[activeProviderState]}
                     </span>
                   </div>
 
@@ -676,9 +666,9 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
                           key={level.val}
                           type="button"
                           onClick={() => setReasoningLevels(prev => ({ ...prev, [activeProviderState]: level.val }))}
-                          className={`py-1.5 text-center text-[9px] rounded font-mono uppercase tracking-wider transition-all cursor-pointer ${
+                          className={`py-1.5 text-center text-[11px] rounded font-mono capitalize transition-all cursor-pointer ${
                             isSelected
-                              ? 'bg-[#df9825]/15 border border-[#df9825] text-[#df9825] font-bold'
+                              ? 'bg-amber-500/15 border border-amber-400 text-amber-300 font-semibold'
                               : 'bg-black/30 border border-white/5 text-slate-400 hover:text-white hover:bg-white/5'
                           }`}
                         >
@@ -711,41 +701,37 @@ export default function AIConnectionModal({ isOpen, onClose }: AIConnectionModal
 
             {/* Dynamic Status Notifications */}
             {successMsg && (
-              <div className="p-2.5 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-[10px] leading-relaxed rounded flex items-center gap-2">
+              <div className="p-2.5 bg-emerald-950/20 border border-emerald-500/20 text-emerald-400 text-[11px] leading-relaxed rounded flex items-center gap-2">
                 <Check className="w-3.5 h-3.5 shrink-0" />
                 <span className="font-sans font-medium">{successMsg}</span>
               </div>
             )}
 
             {/* Actions Buttons spacing */}
-            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-white/5">
+            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-white/[0.08]">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 hover:bg-white/5 border border-white/10 rounded font-bold hover:text-white text-slate-400 transition-all cursor-pointer"
+                className="px-3.5 py-2 hover:bg-white/5 border border-white/10 rounded font-semibold hover:text-white text-slate-300 transition-all cursor-pointer text-[11.5px]"
               >
-                CANCEL
+                Cancel
               </button>
               
               <button
                 type="submit"
                 disabled={saving}
-                className="px-4 py-2 bg-[#df9825] hover:bg-[#df9825]/90 text-black font-bold font-mono uppercase flex items-center gap-1.5 rounded transition-all cursor-pointer disabled:opacity-50"
+                className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-semibold font-mono flex items-center gap-1.5 rounded transition-all cursor-pointer disabled:opacity-50 text-[11.5px]"
               >
                 {saving ? (
-                  <span className="w-3 h-3 border-2 border-slate-900 border-t-transparent rounded-full animate-spin"></span>
+                  <span className="w-3 h-3 border-2 border-slate-950 border-t-transparent rounded-full animate-spin"></span>
                 ) : (
                   <Check className="w-3.5 h-3.5" />
                 )}
-                <span>SAVE CONFIG</span>
+                <span>Save Config</span>
               </button>
             </div>
 
           </form>
-
-        </div>
-
-      </div>
-    </div>
+    </ModalShell>
   );
 }

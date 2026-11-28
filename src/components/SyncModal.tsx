@@ -213,6 +213,17 @@ export default function SyncModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, modWorkspacePath, filesystemPath]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   // Discovery is a navigation aid, not the authority for a manually entered path.
   // In particular, partial input and paths typed while a scan is pending must survive.
   const invalidatePreview = () => {
@@ -485,13 +496,13 @@ export default function SyncModal({
         : lowerName.endsWith('.json')
           ? <FileJson className="w-3.5 h-3.5 text-amber-300 shrink-0" />
           : /\.(?:xml|xsd|lua)$/.test(lowerName)
-            ? <FileCode className="w-3.5 h-3.5 text-cyan-300 shrink-0" />
+            ? <FileCode className="w-3.5 h-3.5 text-sky-300 shrink-0" />
             : <FileText className="w-3.5 h-3.5 text-slate-500 shrink-0" />;
       return (
         <div
           key={key}
           data-testid={treeNodeTestId(source.root, item.path)}
-          className="flex items-center gap-1.5 rounded px-1.5 py-1 font-mono text-[10px] text-slate-400"
+          className="flex items-center gap-1.5 rounded px-1.5 py-1 font-mono text-[11px] text-slate-300"
           style={{ paddingLeft: `${8 + depth * 12}px` }}
           title={item.path}
         >
@@ -506,7 +517,7 @@ export default function SyncModal({
     return (
       <div key={key} data-testid={treeNodeTestId(source.root, item.path)}>
         <div
-          className={`group flex items-center rounded border transition-colors ${isSelected ? 'bg-cyan-500/12 border-cyan-500/30' : 'border-transparent hover:bg-white/[0.04]'}`}
+          className={`group flex items-center rounded border transition-colors ${isSelected ? 'bg-sky-500/12 border-sky-500/35' : 'border-transparent hover:bg-white/[0.04]'}`}
           style={{ paddingLeft: `${depth * 12}px` }}
         >
           {canExpand ? (
@@ -531,18 +542,18 @@ export default function SyncModal({
             className="min-w-0 flex-1 flex items-center gap-1.5 py-1 pr-1.5 text-left cursor-pointer"
             title={item.path}
           >
-            <FolderOpen className={`w-3.5 h-3.5 shrink-0 ${candidate ? 'text-cyan-300' : 'text-slate-500'}`} />
-            <span className={`truncate font-mono text-[10.5px] ${candidate ? 'font-bold text-slate-100' : 'text-slate-400'}`}>{item.name}</span>
-            {item.hasPacked && <span className="text-[7px] px-1 py-0.5 rounded bg-fuchsia-500/10 border border-fuchsia-500/20 text-fuchsia-300">CAT/DAT</span>}
-            {typeof item.childCount === 'number' && <span className="ml-auto font-mono text-[8px] text-slate-600">{item.childCount}</span>}
+            <FolderOpen className={`w-3.5 h-3.5 shrink-0 ${candidate ? 'text-sky-300' : 'text-slate-500'}`} />
+            <span className={`truncate font-mono text-[11px] ${candidate ? 'font-semibold text-slate-100' : 'text-slate-400'}`}>{item.name}</span>
+            {item.hasPacked && <span className="text-[11px] px-1.5 py-0.5 rounded bg-fuchsia-500/10 border border-fuchsia-500/25 text-fuchsia-300">CAT/DAT</span>}
+            {typeof item.childCount === 'number' && <span className="ml-auto font-mono text-[11px] text-slate-500">{item.childCount}</span>}
           </button>
         </div>
-        {nodeErrors[key] && <div className="ml-7 px-2 py-1 text-[9px] text-red-300">{nodeErrors[key]}</div>}
+        {nodeErrors[key] && <div className="ml-7 px-2 py-1 text-[11px] text-rose-300">{nodeErrors[key]}</div>}
         {isExpanded && item.children && (
           <div className="ml-3 border-l border-white/8">
             {item.children.length
               ? item.children.map(child => renderProjectTreeNode(source, child, depth + 1))
-              : <div className="pl-5 py-1 text-[9px] text-slate-600">Empty folder</div>}
+              : <div className="pl-5 py-1 text-[11px] text-slate-500">Empty folder</div>}
           </div>
         )}
       </div>
@@ -552,19 +563,29 @@ export default function SyncModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/85 flex items-center justify-center z-50 p-4 transition-all animate-fade-in font-sans">
-      <div className="w-full max-w-7xl bg-[#10141d] border border-white/10 rounded-lg overflow-hidden shadow-2xl flex flex-col h-[88vh]">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-white/8 bg-[#161b28]">
+    <div
+      data-testid="sync-modal-dialog"
+      className="fixed inset-0 z-[110] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4 font-sans"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Load Mod Project"
+        onClick={event => event.stopPropagation()}
+        className="w-full max-w-7xl bg-[#11151d] border border-white/[0.12] rounded-xl overflow-hidden shadow-2xl flex flex-col h-[88vh]"
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.08] bg-[#141820] shrink-0">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-md border border-cyan-500/25 bg-cyan-500/10 flex items-center justify-center">
-              <PackageOpen className="w-5 h-5 text-cyan-300" />
+            <div className="w-9 h-9 rounded-md border border-sky-500/30 bg-sky-500/10 flex items-center justify-center shrink-0">
+              <PackageOpen className="w-5 h-5 text-sky-400" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-sm font-mono font-bold text-white tracking-wider uppercase">Load Mod Project</h2>
-              <p className="text-[10px] font-mono text-slate-400 truncate">Project-first import for complete X4 extension folders</p>
+              <h2 className="text-sm font-semibold text-slate-100">Load Mod Project</h2>
+              <p className="text-[11px] font-mono text-slate-400 truncate">Project-first import for complete X4 extension folders</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-white/10 text-slate-400 hover:text-white transition-all cursor-pointer" title="Close">
+          <button onClick={onClose} aria-label="Close Load Mod Project" className="p-1.5 rounded-md hover:bg-white/10 text-slate-400 hover:text-white transition-all cursor-pointer" title="Close">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -574,8 +595,8 @@ export default function SyncModal({
             statusBanner.type === 'success'
               ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20'
               : statusBanner.type === 'refused'
-                ? 'bg-red-500/10 text-red-300 border-red-500/20'
-                : 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20'
+                ? 'bg-rose-500/10 text-rose-300 border-rose-500/20'
+                : 'bg-sky-500/10 text-sky-300 border-sky-500/25'
           }`}>
             <div className="flex items-center gap-2 min-w-0">
               {statusBanner.type === 'success' ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertCircle className="w-4 h-4 shrink-0" />}
@@ -585,16 +606,16 @@ export default function SyncModal({
           </div>
         )}
 
-        <div className="flex border-b border-white/8 bg-black/20 font-mono text-xs">
+        <div className="flex border-b border-white/[0.08] bg-[#131720] font-mono text-xs shrink-0">
           <button
             onClick={() => setMode('project')}
-            className={`px-5 py-3 border-b-2 font-bold uppercase tracking-tight transition-all cursor-pointer ${mode === 'project' ? 'border-cyan-400 text-white bg-cyan-500/8' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+            className={`px-5 py-2.5 border-b-2 font-semibold transition-all cursor-pointer ${mode === 'project' ? 'border-sky-400 text-slate-100 bg-sky-500/10' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
           >
             Project Browser
           </button>
           <button
             onClick={() => setMode('file')}
-            className={`px-5 py-3 border-b-2 font-bold uppercase tracking-tight transition-all cursor-pointer ${mode === 'file' ? 'border-cyan-400 text-white bg-cyan-500/8' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+            className={`px-5 py-2.5 border-b-2 font-semibold transition-all cursor-pointer ${mode === 'file' ? 'border-sky-400 text-slate-100 bg-sky-500/10' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
           >
             Single File Parser
           </button>
@@ -605,7 +626,7 @@ export default function SyncModal({
             <aside className="border-r border-white/8 bg-[#10151f] min-h-0 flex flex-col">
               <div className="p-3 border-b border-white/8 space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <div className="font-mono text-[10px] uppercase text-slate-400">Project Sources</div>
+                  <div className="font-mono text-[11px] font-semibold text-slate-300">Project Sources</div>
                   <button onClick={loadProjectTree} className="p-1.5 rounded border border-white/10 bg-white/[0.03] hover:bg-white/10 text-slate-300 cursor-pointer" title="Refresh projects">
                     <RefreshCw className={`w-3.5 h-3.5 ${loadingTree ? 'animate-spin' : ''}`} />
                   </button>
@@ -616,15 +637,15 @@ export default function SyncModal({
                     value={projectFilter}
                     onChange={e => setProjectFilter(e.target.value)}
                     placeholder="Filter mod folders..."
-                    className="w-full bg-black/35 border border-white/10 rounded pl-7 pr-2 py-1.5 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
+                    className="w-full bg-black/35 border border-white/10 rounded pl-7 pr-2 py-1.5 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-sky-500"
                   />
                 </div>
-                <label className="flex items-center gap-2 font-mono text-[10px] text-slate-400 select-none cursor-pointer">
+                <label className="flex items-center gap-2 font-mono text-[11px] text-slate-300 select-none cursor-pointer">
                   <input
                     type="checkbox"
                     checked={showOfficial}
                     onChange={e => setShowOfficial(e.target.checked)}
-                    className="accent-cyan-500"
+                    className="accent-sky-500"
                   />
                   Show official Ego/DLC extensions
                 </label>
@@ -648,20 +669,20 @@ export default function SyncModal({
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
                             <div>
-                              <div className="font-mono text-[10px] font-bold uppercase text-slate-200">{source.label}</div>
-                              <div className="text-[9px] text-slate-500">{source.description}</div>
+                              <div className="font-mono text-[11px] font-semibold text-slate-200">{source.label}</div>
+                              <div className="text-[11px] text-slate-400">{source.description}</div>
                             </div>
-                            <span className="font-mono text-[9px] text-slate-500">{sourceCandidates.length}</span>
+                            <span className="font-mono text-[11px] text-slate-400">{sourceCandidates.length}</span>
                           </div>
-                          <div className="mt-1 font-mono text-[8px] text-slate-500 break-all">{sourcePath || 'Not configured'}</div>
+                          <div className="mt-1 font-mono text-[11px] text-slate-400 break-all">{sourcePath || 'Not configured'}</div>
                         </div>
                       </button>
                       {isSourceExpanded && (
                         <div className="border-t border-white/8 p-1">
                           {rootErrors[source.root] ? (
-                            <div className="text-[9px] text-red-300 p-2">{rootErrors[source.root]}</div>
+                            <div className="text-[11px] text-rose-300 p-2">{rootErrors[source.root]}</div>
                           ) : sourceTree.length === 0 ? (
-                            <div className="text-[10px] text-slate-500 p-2 leading-relaxed">No folders or files found.</div>
+                            <div className="text-[11px] text-slate-400 p-2 leading-relaxed">No folders or files found.</div>
                           ) : sourceTree.map(item => renderProjectTreeNode(source, item))}
                         </div>
                       )}
@@ -675,14 +696,14 @@ export default function SyncModal({
               <div className="p-4 border-b border-white/8 bg-[#0f141e]">
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0">
-                    <div className="font-mono text-[10px] uppercase text-slate-500">Selected Extension</div>
+                    <div className="font-mono text-[11px] font-medium text-slate-400">Selected Extension</div>
                     <h3 className="mt-1 text-lg font-semibold text-white truncate">{selectedCandidate?.name || 'No mod selected'}</h3>
-                    <div className="mt-1 font-mono text-[10px] text-slate-400 break-all">{selectedPath ? `${selectedRoot}: ${selectedPath}` : 'Pick a folder from either project source, or type a relative folder path below.'}</div>
+                    <div className="mt-1 font-mono text-[11px] text-slate-300 break-all">{selectedPath ? `${selectedRoot}: ${selectedPath}` : 'Pick a folder from either project source, or type a relative folder path below.'}</div>
                   </div>
                   <button
                     onClick={importProject}
                     disabled={importLoading || !selectedPath}
-                    className="shrink-0 flex items-center gap-2 px-4 py-2 rounded-md border border-cyan-500/35 bg-cyan-500/12 hover:bg-cyan-500/20 text-cyan-200 font-mono text-[11px] font-bold uppercase cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
+                    className="shrink-0 flex items-center gap-2 px-4 py-2 rounded-md border border-sky-500/40 bg-sky-500/15 hover:bg-sky-500/25 text-sky-200 font-mono text-[11px] font-semibold cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
                   >
                     <FolderSync className={`w-4 h-4 ${importLoading ? 'animate-spin' : ''}`} />
                     Load Project
@@ -694,7 +715,7 @@ export default function SyncModal({
                       <button
                         key={source.root}
                         onClick={() => { setSelectedRoot(source.root); invalidatePreview(); }}
-                        className={`px-2 py-2 font-mono text-[9px] uppercase cursor-pointer ${selectedRoot === source.root ? 'bg-cyan-500/15 text-cyan-200' : 'bg-black/35 text-slate-500 hover:text-slate-300'}`}
+                        className={`px-2 py-2 font-mono text-[11px] capitalize cursor-pointer ${selectedRoot === source.root ? 'bg-sky-500/15 text-sky-200' : 'bg-black/35 text-slate-400 hover:text-slate-200'}`}
                         title={source.label}
                       >
                         {source.root}
@@ -705,7 +726,7 @@ export default function SyncModal({
                     value={selectedPath}
                     onChange={e => { setSelectedPath(e.target.value); invalidatePreview(); }}
                     placeholder="Relative folder path, e.g. sn_mod_support_apis"
-                    className="flex-1 bg-black/35 border border-white/10 rounded px-2 py-2 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-cyan-500"
+                    className="flex-1 bg-black/35 border border-white/10 rounded px-2 py-2 text-[11px] text-slate-200 font-mono focus:outline-none focus:border-sky-500"
                   />
                   <button
                     onClick={() => previewProject(selectedRoot, selectedPath)}
@@ -722,10 +743,10 @@ export default function SyncModal({
                   {DOMAIN_RULES.slice(0, 5).map(d => {
                     const active = detectedDomains.includes(d.label);
                     return (
-                      <div key={d.key} className={`rounded-md border p-3 ${active ? 'bg-cyan-500/8 border-cyan-500/25' : 'bg-white/[0.025] border-white/8'}`}>
+                      <div key={d.key} className={`rounded-md border p-3 ${active ? 'bg-sky-500/10 border-sky-500/30' : 'bg-white/[0.025] border-white/8'}`}>
                         <div className="flex items-center gap-2">
-                          <Layers3 className={`w-4 h-4 ${active ? 'text-cyan-300' : 'text-slate-500'}`} />
-                          <span className={`font-mono text-[10px] font-bold uppercase ${active ? 'text-slate-100' : 'text-slate-500'}`}>{d.label}</span>
+                          <Layers3 className={`w-4 h-4 ${active ? 'text-sky-300' : 'text-slate-500'}`} />
+                          <span className={`font-mono text-[11px] font-semibold ${active ? 'text-slate-100' : 'text-slate-400'}`}>{d.label}</span>
                         </div>
                         <div className="mt-2 text-[11px] text-slate-400">{active ? 'Detected in package' : 'No files detected'}</div>
                       </div>
@@ -736,7 +757,7 @@ export default function SyncModal({
                 <section className="rounded-md border border-white/8 bg-white/[0.025] p-4">
                   <div className="flex items-center gap-2 mb-3">
                     <Code2 className="w-4 h-4 text-emerald-300" />
-                    <h4 className="font-mono text-[11px] text-white font-bold uppercase">Import Contract</h4>
+                    <h4 className="font-mono text-[11px] text-slate-100 font-semibold">Import Contract</h4>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                     {[
@@ -748,14 +769,14 @@ export default function SyncModal({
                     ].map(([label, count, detail]) => (
                       <div key={String(label)} className="rounded border border-white/8 bg-black/30 p-2">
                         <div className="font-mono text-[15px] text-white font-bold">{String(count)}</div>
-                        <div className="font-mono text-[9px] uppercase text-slate-400">{label}</div>
-                        <div className="mt-1 text-[10px] text-slate-500">{detail}</div>
+                        <div className="font-mono text-[11px] font-semibold text-slate-300">{label}</div>
+                        <div className="mt-1 text-[11px] text-slate-400">{detail}</div>
                       </div>
                     ))}
                   </div>
                   {graphNodeCount !== null && (
-                    <div className="mt-3 rounded border border-cyan-500/15 bg-cyan-500/[0.04] px-3 py-2 text-[10px] text-slate-400">
-                      <span className="font-mono font-bold text-cyan-200">{graphNodeCount} graph nodes</span>
+                    <div className="mt-3 rounded border border-sky-500/20 bg-sky-500/[0.05] px-3 py-2 text-[11px] text-slate-300">
+                      <span className="font-mono font-semibold text-sky-300">{graphNodeCount} graph nodes</span>
                       {opaqueNodeCount
                         ? ` · ${localizedOpaqueNodeCount} localized raw element${localizedOpaqueNodeCount === 1 ? '' : 's'} · ${opaqueTopLevelNodeCount} whole cue${opaqueTopLevelNodeCount === 1 ? '' : 's'} collapsed`
                         : ' · every MD element mapped to a typed node · 0 whole cues collapsed'}
@@ -764,12 +785,12 @@ export default function SyncModal({
                 </section>
 
                 <section className="rounded-md border border-white/8 bg-black/25 p-4">
-                  <h4 className="font-mono text-[11px] text-white font-bold uppercase mb-2">Preview Notes</h4>
+                  <h4 className="font-mono text-[11px] text-slate-100 font-semibold mb-2">Preview Notes</h4>
                   <div className="text-[11px] text-slate-400 leading-relaxed">
                     Whole-folder import preserves the mod ecosystem: `content.xml`, MD, libraries, translations, UI/Lua, unknown files, and packed artifacts. Editable domains become Forge models; unsupported domains stay passthrough so import/export does not silently destroy the package.
                   </div>
                   {!!opaqueNodeCount && (
-                    <div className="mt-3 text-[10px] text-amber-200/80 leading-relaxed border border-amber-500/15 bg-amber-500/[0.04] rounded p-2">
+                    <div className="mt-3 text-[11px] text-amber-200/85 leading-relaxed border border-amber-500/20 bg-amber-500/[0.05] rounded p-2.5">
                       {opaqueTopLevelNodeCount > 0
                         ? `${opaqueTopLevelNodeCount} whole cue${opaqueTopLevelNodeCount === 1 ? '' : 's'} could not be decomposed and remain lossless raw nodes. `
                         : 'No whole cue was collapsed. '}
@@ -789,7 +810,7 @@ export default function SyncModal({
 
             <aside className="border-l border-white/8 bg-[#10151f] min-h-0 flex flex-col">
               <div className="p-3 border-b border-white/8">
-                <div className="font-mono text-[10px] uppercase text-slate-400">Project Summary</div>
+                <div className="font-mono text-[11px] font-semibold text-slate-300">Project Summary</div>
                 <div className="mt-2 space-y-2 text-[11px] text-slate-300">
                   <div className="flex justify-between gap-2"><span>Candidate mods</span><span className="font-mono text-white">{candidates.length}</span></div>
                   <div className="flex justify-between gap-2"><span>Selected files</span><span className="font-mono text-white">{selectedFileCount ?? 'preview pending'}</span></div>
@@ -798,20 +819,20 @@ export default function SyncModal({
               </div>
               <div className="flex-1 overflow-y-auto scrollbar-thin p-3 space-y-3">
                 <div className="rounded border border-white/8 bg-black/25 p-3">
-                  <div className="font-mono text-[10px] uppercase text-slate-400 mb-2">Detected Domains</div>
+                  <div className="font-mono text-[11px] font-semibold text-slate-300 mb-2">Detected Domains</div>
                   <div className="flex flex-wrap gap-1">
                     {detectedDomains.length ? detectedDomains.map(d => (
-                      <span key={d} className="font-mono text-[9px] text-cyan-200 bg-cyan-500/10 border border-cyan-500/20 rounded px-1.5 py-0.5">{d}</span>
+                      <span key={d} className="font-mono text-[11px] text-sky-200 bg-sky-500/10 border border-sky-500/25 rounded px-1.5 py-0.5">{d}</span>
                     )) : <span className="text-[11px] text-slate-500">{selectedPath ? 'No supported domains detected.' : 'No project selected.'}</span>}
                   </div>
                 </div>
                 <div className="rounded border border-white/8 bg-black/25 p-3">
-                  <div className="font-mono text-[10px] uppercase text-slate-400 mb-2">Current Workspace</div>
+                  <div className="font-mono text-[11px] font-semibold text-slate-300 mb-2">Current Workspace</div>
                   <div className="text-[11px] text-slate-300 font-mono break-all">{workspace.name || 'Untitled workspace'}</div>
-                  <div className="mt-2 text-[10px] text-slate-500">Loading a project creates a checkpoint before replacing this workspace.</div>
+                  <div className="mt-2 text-[11px] text-slate-400">Loading a project creates a checkpoint before replacing this workspace.</div>
                 </div>
               </div>
-              <div className="p-3 border-t border-white/8 text-[10px] text-slate-500 flex items-start gap-2">
+              <div className="p-3 border-t border-white/8 text-[11px] text-slate-400 flex items-start gap-2">
                 <ShieldAlert className="w-3.5 h-3.5 text-yellow-500 shrink-0 mt-0.5" />
                 <span>Project import is local and read-only until you explicitly compile or deploy.</span>
               </div>
@@ -824,28 +845,28 @@ export default function SyncModal({
               onDragOver={handleDrag}
               onDragLeave={handleDrag}
               onDrop={handleDrop}
-              className={`border-2 border-dashed rounded-lg p-6 text-center select-none cursor-pointer transition-all ${dragActive ? 'border-cyan-500 bg-cyan-500/10' : 'border-white/10 hover:border-cyan-500/40 bg-black/25'}`}
+              className={`border-2 border-dashed rounded-lg p-6 text-center select-none cursor-pointer transition-all ${dragActive ? 'border-sky-500 bg-sky-500/10' : 'border-white/10 hover:border-sky-500/40 bg-black/25'}`}
             >
               <input type="file" id="import-file-picker" accept=".json,.xml" className="hidden" onChange={handleFileInput} />
               <label htmlFor="import-file-picker" className="cursor-pointer space-y-2 block">
-                <Upload className="w-8 h-8 text-cyan-400 mx-auto" />
-                <div className="text-white text-xs font-mono font-medium">Drop one file here, or <span className="text-cyan-400 underline">browse computer</span></div>
-                <p className="text-[10px] text-slate-500 font-mono">Legacy path for workspace `.json` or individual Egosoft `.xml` files.</p>
+                <Upload className="w-8 h-8 text-sky-400 mx-auto" />
+                <div className="text-white text-xs font-mono font-medium">Drop one file here, or <span className="text-sky-400 underline">browse computer</span></div>
+                <p className="text-[11px] text-slate-400 font-mono">Legacy path for workspace `.json` or individual Egosoft `.xml` files.</p>
               </label>
             </div>
 
             <div className="relative">
               <div className="flex items-center justify-between mb-1.5 font-mono">
-                <div className="text-[10px] text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                <div className="text-[11px] text-slate-300 font-semibold flex items-center gap-1">
                   <ClipboardPaste className="w-3.5 h-3.5" />
                   Paste Raw Code
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => executeImport(importText, 'json')} className="px-2 py-1 rounded text-[10px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/35 hover:bg-indigo-600/35 cursor-pointer transition-all flex items-center gap-1">
+                  <button onClick={() => executeImport(importText, 'json')} className="px-2.5 py-1 rounded text-[11px] bg-indigo-600/20 text-indigo-300 border border-indigo-500/35 hover:bg-indigo-600/35 cursor-pointer transition-all flex items-center gap-1">
                     <FileJson className="w-3 h-3" />
                     Import JSON
                   </button>
-                  <button onClick={() => executeImport(importText, 'xml')} className="px-2 py-1 rounded text-[10px] bg-cyan-600/20 text-cyan-300 border border-cyan-500/35 hover:bg-cyan-600/35 cursor-pointer transition-all flex items-center gap-1">
+                  <button onClick={() => executeImport(importText, 'xml')} className="px-2.5 py-1 rounded text-[11px] bg-sky-600/20 text-sky-300 border border-sky-500/35 hover:bg-sky-600/35 cursor-pointer transition-all flex items-center gap-1">
                     <FileCode className="w-3 h-3" />
                     Parse XML
                   </button>
@@ -855,7 +876,7 @@ export default function SyncModal({
                 value={importText}
                 onChange={e => setImportText(e.target.value)}
                 placeholder="Paste workspace JSON or standard X4 MD script XML here..."
-                className="w-full h-64 p-3 rounded-lg bg-black/60 border border-white/10 font-mono text-[11px] text-slate-300 focus:outline-none focus:border-cyan-500 transition-all resize-none"
+                className="w-full h-64 p-3 rounded-lg bg-black/60 border border-white/10 font-mono text-[11px] text-slate-300 focus:outline-none focus:border-sky-500 transition-all resize-none"
               />
             </div>
           </div>

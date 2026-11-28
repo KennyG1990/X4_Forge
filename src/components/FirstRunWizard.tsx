@@ -103,7 +103,7 @@ const FirstRunWizard: React.FC<FirstRunWizardProps> = ({ onClose, onOpenManualSe
   const row = (label: string, value: string) => (
     <div className="flex items-baseline gap-2.5 text-[11px]">
       <span className="text-slate-400 w-36 shrink-0 text-right">{label}</span>
-      <span className="text-slate-200 font-mono break-all">{value}</span>
+      <span className="text-slate-200 font-mono break-words">{value}</span>
     </div>
   );
 

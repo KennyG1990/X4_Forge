@@ -125,11 +125,11 @@ function DirectoryRow({
   return (
     <div data-testid={testId} className="p-3 rounded-lg bg-white/[0.02] border border-white/5 space-y-2">
       <div className="flex items-center gap-2">
-        <span className="text-cyan-400">{icon}</span>
-        <span className="text-[12px] font-mono font-bold text-white uppercase tracking-wide">{title}</span>
+        <span className="text-sky-400">{icon}</span>
+        <span className="text-[12px] font-mono font-semibold text-slate-100">{title}</span>
         <span className="relative group flex items-center">
-          <Info className="w-3.5 h-3.5 text-slate-500 hover:text-cyan-400 cursor-help" />
-          <span className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 z-50 hidden group-hover:block w-64 bg-[#05070a] border border-cyan-500/30 text-[10px] text-slate-300 font-sans leading-relaxed rounded p-2 shadow-xl">
+          <Info className="w-3.5 h-3.5 text-slate-500 hover:text-sky-400 cursor-help" />
+          <span className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 z-50 hidden group-hover:block w-64 bg-[#0c1017] border border-sky-500/30 text-[11px] text-slate-300 font-sans leading-relaxed rounded p-2 shadow-xl">
             {tooltip}
           </span>
         </span>
@@ -148,14 +148,14 @@ function NavigationOrderList({ title, items, hidden, onToggle, onMove }: {
 }) {
   return (
     <div className="rounded border border-white/10 bg-black/20 p-2 min-w-0">
-      <div className="mb-1.5 text-[9px] font-mono font-bold uppercase tracking-wider text-slate-400">{title}</div>
+      <div className="mb-1.5 text-[11px] font-mono font-semibold text-slate-300">{title}</div>
       <div className="max-h-44 overflow-y-auto custom-scrollbar space-y-1">
         {items.map((item, index) => {
           const isHidden = hidden.includes(item.id);
           return (
             <div key={item.id} data-layout-item={item.id} className={`h-7 flex items-center gap-1 rounded border px-1.5 ${isHidden ? 'border-white/5 bg-black/20 text-slate-600' : 'border-white/10 bg-white/[0.025] text-slate-300'}`}>
               <button type="button" onClick={() => onToggle(item.id)} className="w-6 h-6 grid place-items-center rounded hover:bg-white/5" title={isHidden ? `Show ${item.label}` : `Hide ${item.label}`} aria-label={isHidden ? `Show ${item.label}` : `Hide ${item.label}`}>
-                {isHidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3 text-cyan-400" />}
+                {isHidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3 text-sky-400" />}
               </button>
               <span className="flex-1 min-w-0 truncate text-[9.5px] font-mono">{item.label}</span>
               <button type="button" disabled={index === 0} onClick={() => onMove(item.id, -1)} className="w-6 h-6 grid place-items-center rounded hover:bg-white/5 disabled:opacity-20" title={`Move ${item.label} up`} aria-label={`Move ${item.label} up`}><ArrowUp className="w-3 h-3" /></button>
@@ -260,6 +260,17 @@ export default function DirectorySettingsModal({
       }
     })();
   }, [isOpen, detectGameInstall]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -437,7 +448,7 @@ export default function DirectorySettingsModal({
             <SettingsIcon className="w-4 h-4 text-sky-400" />
             <div>
               <span className="font-semibold text-slate-100 text-sm block">Studio Settings</span>
-              <span className="text-[10.5px] text-slate-400">Workbench layout, X4 game &amp; unpacked corpus paths, release packaging, and AI</span>
+              <span className="text-[11px] text-slate-400">Workbench layout, X4 game &amp; unpacked corpus paths, release packaging, and AI</span>
             </div>
           </div>
           <button onClick={onClose} aria-label="Close settings" className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-colors cursor-pointer">
@@ -489,10 +500,10 @@ export default function DirectorySettingsModal({
             tooltip="Customize the Studio shell without deleting any feature. Hidden destinations remain listed here, collapsed bars always keep a restore handle, and Reset Layout returns the complete default inventory."
             testId="studio-layout-settings"
           >
-            <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
-              <label className="space-y-1"><span className="text-slate-500 uppercase">Workspace bar</span><select data-testid="workspace-dock-select" value={layoutPreferences.workspaceDock} onChange={event => setLayoutPreferences(previous => ({ ...previous, workspaceDock: event.target.value as 'top' | 'bottom' }))} className="settings-select"><option value="top">Dock top</option><option value="bottom">Dock bottom</option></select></label>
-              <label className="space-y-1"><span className="text-slate-500 uppercase">Tool panel</span><select data-testid="tool-dock-select" value={layoutPreferences.toolDock} onChange={event => setLayoutPreferences(previous => ({ ...previous, toolDock: event.target.value as 'left' | 'right' }))} className="settings-select"><option value="left">Dock left</option><option value="right">Dock right</option></select></label>
-              <label className="space-y-1"><span className="text-slate-500 uppercase">Density</span><select data-testid="studio-density-select" value={layoutPreferences.density} onChange={event => setLayoutPreferences(previous => ({ ...previous, density: event.target.value as 'compact' | 'comfortable' }))} className="settings-select"><option value="compact">Compact</option><option value="comfortable">Comfortable</option></select></label>
+            <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
+              <label className="space-y-1"><span className="text-slate-400">Workspace bar</span><select data-testid="workspace-dock-select" value={layoutPreferences.workspaceDock} onChange={event => setLayoutPreferences(previous => ({ ...previous, workspaceDock: event.target.value as 'top' | 'bottom' }))} className="settings-select"><option value="top">Dock top</option><option value="bottom">Dock bottom</option></select></label>
+              <label className="space-y-1"><span className="text-slate-400">Tool panel</span><select data-testid="tool-dock-select" value={layoutPreferences.toolDock} onChange={event => setLayoutPreferences(previous => ({ ...previous, toolDock: event.target.value as 'left' | 'right' }))} className="settings-select"><option value="left">Dock left</option><option value="right">Dock right</option></select></label>
+              <label className="space-y-1"><span className="text-slate-400">Density</span><select data-testid="studio-density-select" value={layoutPreferences.density} onChange={event => setLayoutPreferences(previous => ({ ...previous, density: event.target.value as 'compact' | 'comfortable' }))} className="settings-select"><option value="compact">Compact</option><option value="comfortable">Comfortable</option></select></label>
               <div className="flex items-end gap-1">
                 <button type="button" data-testid="toggle-workspace-bar" onClick={() => setLayoutPreferences(previous => ({ ...previous, workspaceBarCollapsed: !previous.workspaceBarCollapsed }))} className="settings-button">{layoutPreferences.workspaceBarCollapsed ? 'Show' : 'Hide'} workspace bar</button>
                 <button type="button" data-testid="toggle-side-panel" onClick={() => setLayoutPreferences(previous => ({ ...previous, sidePanelCollapsed: !previous.sidePanelCollapsed }))} className="settings-button">{layoutPreferences.sidePanelCollapsed ? 'Show' : 'Hide'} panel</button>
@@ -517,7 +528,7 @@ export default function DirectorySettingsModal({
             </div>
 
             <div className="flex items-center justify-between gap-3 border-t border-white/5 pt-2">
-              <span className="text-[9px] text-slate-500">Drag tabs on the bars, or use these keyboard-accessible arrow controls. At least one destination always remains visible.</span>
+              <span className="text-[11px] text-slate-400">Drag tabs on the bars, or use these keyboard-accessible arrow controls. At least one destination always remains visible.</span>
               <button type="button" data-testid="reset-studio-layout" onClick={() => setLayoutPreferences({ ...DEFAULT_STUDIO_LAYOUT, workspaceOrder: [...DEFAULT_STUDIO_LAYOUT.workspaceOrder], toolOrder: [...DEFAULT_STUDIO_LAYOUT.toolOrder] })} className="settings-button shrink-0"><RotateCcw className="w-3 h-3" /> Reset layout</button>
             </div>
           </DirectoryRow>}
@@ -528,12 +539,12 @@ export default function DirectorySettingsModal({
             tooltip="Guided mode explains and displays every required stage. Express mode collapses successful detail only; it never skips validation, confirmation, output selection, or Steam's interactive upload."
             testId="release-mode-settings"
           >
-            <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+            <div className="grid grid-cols-2 gap-2 text-[11px] font-mono">
               <button
                 type="button"
                 data-testid="release-mode-guided"
                 onClick={() => setReleasePreferences({ version: 1, mode: 'guided', expressRiskAcknowledged: false })}
-                className={`settings-button ${releasePreferences.mode === 'guided' ? 'border-cyan-500 text-cyan-300' : ''}`}
+                className={`settings-button ${releasePreferences.mode === 'guided' ? 'border-sky-500 text-sky-300 bg-sky-500/10' : ''}`}
               >
                 Guided (recommended)
               </button>
@@ -568,10 +579,10 @@ export default function DirectorySettingsModal({
               readOnly={installationControlsLocked}
               onChange={e => { setWorkspaceInput(e.target.value); setDirectoryIssues(current => current.filter(issue => issue.field !== 'modWorkspacePath')); }}
               placeholder="e.g. C:\Users\you\Documents\X4ForgeMods"
-              className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
+              className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-sky-500"
             />
             <p className="text-[9.5px] leading-relaxed text-slate-500">{isolatedScratch ? 'The Forge Dev launcher controls this workspace.' : 'Forge develops and snapshots mod copies here. The live game is updated only through an explicit Deploy operation.'}</p>
-            {issuesFor('modWorkspacePath').map(issue => <div key={issue.code} className="text-[10px] font-mono text-red-300 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue.message}</div>)}
+            {issuesFor('modWorkspacePath').map(issue => <div key={issue.code} className="text-[11px] font-mono text-rose-300 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue.message}</div>)}
           </DirectoryRow>
 
           {/* 1b. Filesystem folder */}
@@ -587,10 +598,10 @@ export default function DirectorySettingsModal({
               readOnly={installationControlsLocked}
               onChange={e => { setFilesystemInput(e.target.value); setDirectoryIssues(current => current.filter(issue => issue.field !== 'filesystemPath')); }}
               placeholder="e.g. G:\SteamLibrary\steamapps\common\X4 Foundations\extensions"
-              className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
+              className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-sky-500"
             />
             <p className="text-[9.5px] leading-relaxed text-slate-500">{isolatedScratch ? 'Browse scratch extensions here. The Forge Dev launcher controls this path.' : 'Browse/import installed mods here. Develop in Mod Workspace; update the live game only through validated Deploy.'}</p>
-            {issuesFor('filesystemPath').map(issue => <div key={issue.code} className="text-[10px] font-mono text-red-300 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue.message}</div>)}
+            {issuesFor('filesystemPath').map(issue => <div key={issue.code} className="text-[11px] font-mono text-rose-300 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue.message}</div>)}
           </DirectoryRow>
 
           {/* 1c. Optional temporary deploy-snapshot folder (#96 / #123) */}
@@ -608,7 +619,7 @@ export default function DirectorySettingsModal({
                 readOnly={directorySettingsLocked}
                 onChange={e => { setSnapshotTempInput(e.target.value); setDirectoryIssues(current => current.filter(issue => issue.field !== 'snapshotTempPath')); }}
                 placeholder="Optional: e.g. D:\ForgeTemp\DeploySnapshots (leave blank for system TEMP)"
-                className="flex-1 min-w-0 px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
+                className="flex-1 min-w-0 px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-sky-500"
               />
               {!directorySettingsLocked && snapshotTempInput.trim() && (
                 <button
@@ -625,7 +636,7 @@ export default function DirectorySettingsModal({
             {resolved?.snapshotTempPath && (
               <div data-testid="snapshot-temp-effective" className="flex flex-wrap items-center gap-2 text-[9.5px] font-mono text-slate-400">
                 <span>Effective: <span className="text-slate-200">{resolved.snapshotTempPath}</span></span>
-                <span className="px-1.5 py-0.5 rounded border border-cyan-500/25 bg-cyan-500/10 text-cyan-300 uppercase">
+                <span className="px-1.5 py-0.5 rounded border border-sky-500/30 bg-sky-500/10 text-sky-300">
                   {directorySettingsLocked || resolved.snapshotTempSource === 'launcher'
                     ? 'launcher'
                     : resolved.snapshotTempSource === 'saved'
@@ -637,7 +648,7 @@ export default function DirectorySettingsModal({
             <p className="text-[9.5px] leading-relaxed text-slate-500">
               Saving this setting never moves projects or deploys files. Forge retires only its own temporary snapshot folders and refuses stale, aliased, or inaccessible roots without falling back to another drive.
             </p>
-            {issuesFor('snapshotTempPath').map(issue => <div key={issue.code} className="text-[10px] font-mono text-red-300 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue.message}</div>)}
+            {issuesFor('snapshotTempPath').map(issue => <div key={issue.code} className="text-[11px] font-mono text-rose-300 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue.message}</div>)}
           </DirectoryRow>
 
           {/* 2. X4 Game installation (server path) */}
@@ -653,7 +664,7 @@ export default function DirectorySettingsModal({
               readOnly={installationControlsLocked}
               onChange={e => { setGamePath(e.target.value); setDirectoryIssues(current => current.filter(issue => issue.field !== 'x4GamePath')); setDetection({ state: 'idle' }); }}
               placeholder="e.g. C:\Program Files (x86)\Steam\steamapps\common\X4 Foundations"
-              className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
+              className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-sky-500"
             />
             {isolatedScratch && <p className="text-[9.5px] leading-relaxed text-slate-500">This scratch target uses the unpacked corpus for game data and schemas.</p>}
             {resolved && !installationControlsLocked && <div className="flex items-center gap-2">
@@ -661,14 +672,14 @@ export default function DirectorySettingsModal({
                 type="button"
                 onClick={() => void detectGameInstall(true)}
                 disabled={detection.state === 'scanning'}
-                className="inline-flex items-center gap-1 rounded border border-cyan-500/30 px-2 py-1 text-[10px] font-mono font-semibold text-cyan-300 hover:border-cyan-400 disabled:opacity-50"
+                className="inline-flex items-center gap-1 rounded border border-sky-500/35 bg-sky-500/10 px-2.5 py-1 text-[11px] font-mono font-semibold text-sky-300 hover:bg-sky-500/20 hover:border-sky-400 disabled:opacity-50"
               >
                 {detection.state === 'scanning' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Search className="w-3 h-3" />}
                 {detection.state === 'scanning' ? 'Detecting…' : 'Detect X4 installation'}
               </button>
               {detection.message && <span className={`text-[9.5px] ${detection.state === 'found' ? 'text-emerald-300' : 'text-amber-300'}`}>{detection.message}</span>}
             </div>}
-            {issuesFor('x4GamePath').map(issue => <div key={issue.code} className="text-[10px] font-mono text-red-300 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue.message}</div>)}
+            {issuesFor('x4GamePath').map(issue => <div key={issue.code} className="text-[11px] font-mono text-rose-300 flex items-start gap-1"><AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{issue.message}</div>)}
           </DirectoryRow>
 
           {/* 2b. One read-only source for canonical data, schemas, and examples. */}
@@ -684,10 +695,10 @@ export default function DirectorySettingsModal({
               readOnly={directorySettingsLocked}
               onChange={e => setReferenceRoot(e.target.value)}
               placeholder="e.g. D:\X4 unpacked 9.00"
-              className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
+              className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-sky-500"
             />
 
-            <div className="rounded border border-cyan-500/20 bg-cyan-500/[0.04] p-2 text-[10px] leading-relaxed text-slate-400">
+            <div className="rounded border border-sky-500/25 bg-sky-500/[0.05] p-2.5 text-[11px] leading-relaxed text-slate-300">
               <div className="flex items-center justify-between gap-3">
                 <span><span className="font-semibold text-slate-200">Need an unpacked copy?</span> X4 Unpacker provides GUI and CLI extraction of base-game and DLC catalogues with patch ordering.</span>
                 <a
@@ -697,17 +708,17 @@ export default function DirectorySettingsModal({
                   onClick={(event) => {
                     if (openExternalUrlInNativeHost(X4_UNPACKER_URL)) event.preventDefault();
                   }}
-                  className="shrink-0 inline-flex items-center gap-1 rounded border border-cyan-500/30 px-2 py-1 font-mono font-semibold text-cyan-300 hover:border-cyan-400 hover:text-cyan-200"
+                  className="shrink-0 inline-flex items-center gap-1 rounded border border-sky-500/35 bg-sky-500/10 px-2.5 py-1 font-mono font-semibold text-sky-300 hover:bg-sky-500/20 hover:border-sky-400 hover:text-sky-200"
                   title="Open X4 Unpacker on Nexus Mods"
                 >
                   Find X4 Unpacker <ExternalLink className="h-3 w-3" />
                 </a>
               </div>
-              <div className="mt-1 text-[9px] text-slate-500">Created by <span className="font-semibold text-slate-300">z1ppeh</span>. Unofficial community utility; not affiliated with or endorsed by Egosoft. Forge does not download or run it.</div>
+              <div className="mt-1 text-[11px] text-slate-400">Created by <span className="font-semibold text-slate-200">z1ppeh</span>. Unofficial community utility; not affiliated with or endorsed by Egosoft. Forge does not download or run it.</div>
             </div>
 
             {resolved && (
-              <div className="mt-1 text-[10px] font-mono">
+              <div className="mt-1 text-[11px] font-mono">
                 {resolved.x4ReferenceExists ? (
                   <span className="text-emerald-400 flex items-center gap-1"><CheckCircle className="w-3 h-3" /> Corpus root found — read-only discovery and canonical ID checks are available</span>
                 ) : (
@@ -717,7 +728,7 @@ export default function DirectorySettingsModal({
             )}
 
             {corpusStatus?.state === 'scanning' && (
-              <div className="rounded border border-cyan-500/20 bg-black/20 p-2 text-[10px] font-mono text-cyan-300">
+              <div className="rounded border border-sky-500/25 bg-black/25 p-2.5 text-[11px] font-mono text-sky-300">
                 Discovering corpus… {number(corpusStatus.scanning?.files || 0)} files indexed. The last complete generation remains active.
               </div>
             )}
@@ -737,7 +748,7 @@ export default function DirectorySettingsModal({
               </div>
             )}
             {(coverageError || corpusStatus?.state === 'error' || corpusStatus?.state === 'unavailable') && (
-              <div className="text-[10px] font-mono text-amber-400 flex items-start gap-1">
+              <div className="text-[11px] font-mono text-amber-300 flex items-start gap-1">
                 <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />
                 <span>{coverageError || corpusStatus?.error || 'Corpus coverage is unavailable until a valid unpacked root is saved.'}</span>
               </div>
@@ -748,10 +759,10 @@ export default function DirectorySettingsModal({
             type="button"
             aria-expanded={showAdvancedSchema}
             onClick={() => setAdvancedSchemaOpen(open => !open)}
-            className="w-full px-3 py-2 rounded-lg border border-white/5 bg-white/[0.015] text-left text-[10px] font-mono text-slate-500 hover:text-cyan-300 hover:border-cyan-500/20 cursor-pointer"
+            className="w-full px-3 py-2 rounded-lg border border-white/10 bg-white/[0.02] text-left text-[11px] font-mono text-slate-400 hover:text-sky-300 hover:border-sky-500/30 cursor-pointer"
           >
             {showAdvancedSchema ? '▾' : '▸'} Advanced fallback: manual XSD schema folder
-            <span className="block mt-0.5 font-sans text-[9px] text-slate-600">Normally derived from the unpacked corpus above. Use this only for harvested schemas or a nonstandard layout.</span>
+            <span className="block mt-0.5 font-sans text-[11px] text-slate-400">Normally derived from the unpacked corpus above. Use this only for harvested schemas or a nonstandard layout.</span>
           </button>
 
           {/* 3. Legacy/manual schema override. The corpus is the primary source. */}
@@ -767,10 +778,10 @@ export default function DirectorySettingsModal({
               readOnly={directorySettingsLocked}
               onChange={e => setSchemaPath(e.target.value)}
               placeholder="Optional: folder containing md.xsd + common.xsd"
-              className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-cyan-500"
+              className="w-full px-2 py-1.5 rounded bg-[#0F1115] border border-white/10 text-[11px] font-mono text-slate-300 focus:outline-none focus:border-sky-500"
             />
             {resolved && (
-              <div className="mt-1 space-y-1.5 text-[10px] font-mono">
+              <div className="mt-1 space-y-1.5 text-[11px] font-mono">
                 {schemaOk ? (
                   <span className="text-emerald-400 flex items-center gap-1"><CheckCircle className="w-3 h-3" /> md.xsd &amp; common.xsd found — schema-aware validation is on</span>
                 ) : (
@@ -781,21 +792,21 @@ export default function DirectorySettingsModal({
                       onClick={harvestFromInstall}
                       disabled={harvesting || !gamePath.trim()}
                       title={gamePath.trim() ? 'Extract X4’s schema files from your game install' : 'Set your X4 Game Installation path above first'}
-                      className="px-2 py-0.5 rounded bg-cyan-600 hover:bg-cyan-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-[10px] font-semibold cursor-pointer inline-flex items-center gap-1"
+                      className="px-2.5 py-1 rounded bg-sky-600 hover:bg-sky-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-[11px] font-semibold cursor-pointer inline-flex items-center gap-1"
                     >
                       <Database className="w-3 h-3" /> {harvesting ? 'Extracting…' : 'Extract schemas from my game install'}
                     </button>}
                   </div>
                 )}
-                <button type="button" onClick={() => setGuideOpen(o => !o)} className="text-slate-500 hover:text-cyan-300 text-[10px] inline-flex items-center gap-1 cursor-pointer">
+                <button type="button" onClick={() => setGuideOpen(o => !o)} className="text-slate-400 hover:text-sky-300 text-[11px] inline-flex items-center gap-1 cursor-pointer">
                   <Info className="w-3 h-3" /> How validation works &amp; where to get the schema files {showGuide ? '▾' : '▸'}
                 </button>
                 {showGuide && (
-                  <div className="text-[10px] leading-relaxed text-slate-400 font-sans bg-white/[0.03] border border-white/10 rounded p-2 space-y-1">
+                  <div className="text-[11px] leading-relaxed text-slate-300 font-sans bg-white/[0.03] border border-white/10 rounded p-2.5 space-y-1">
                     <p><span className="text-slate-200 font-semibold">How it works:</span> the Forge validates your mod against X4’s own schema files — md.xsd, common.xsd, and ~40 more the game ships. The more it has, the more of your mod it checks (factions, game starts, patches, and so on).</p>
                     <p><span className="text-slate-200 font-semibold">What it needs:</span> those schema files, from <span className="text-slate-200">your</span> install — the Forge can’t legally ship X4’s files with it.</p>
                     <p><span className="text-emerald-300 font-semibold">Preferred:</span> set <span className="text-slate-200">X4 Unpacked Game Corpus</span>. Forge derives schemas and canonical base/DLC data from that one read-only root.</p>
-                    {!installationControlsLocked && <p><span className="text-cyan-300 font-semibold">Schema-only fallback:</span> set your <span className="text-slate-200">X4 Game Installation</span> and click <span className="text-slate-200">Extract schemas</span>. This enables XSD structure checks, but it does not provide the canonical IDs, examples, localization, or asset inventory of a complete unpacked corpus.</p>}
+                    {!installationControlsLocked && <p><span className="text-sky-300 font-semibold">Schema-only fallback:</span> set your <span className="text-slate-200">X4 Game Installation</span> and click <span className="text-slate-200">Extract schemas</span>. This enables XSD structure checks, but it does not provide the canonical IDs, examples, localization, or asset inventory of a complete unpacked corpus.</p>}
                   </div>
                 )}
               </div>
@@ -809,7 +820,7 @@ export default function DirectorySettingsModal({
             tooltip="Meet other X4 Forge users, ask questions about Forge, share your mods, and discuss mod-authoring workflows."
             testId="forge-discord-community"
           >
-            <div className="rounded border border-indigo-400/20 bg-indigo-400/[0.04] p-2 text-[10px] leading-relaxed text-slate-400">
+            <div className="rounded border border-indigo-400/25 bg-indigo-400/[0.05] p-2.5 text-[11px] leading-relaxed text-slate-300">
               <div className="flex items-center justify-between gap-3">
                 <span><span className="font-semibold text-slate-200">Join the X4 Forge Discord.</span> Ask questions about Forge, discuss your workflow, share the mods you are building, and connect with other mod authors.</span>
                 <a
@@ -825,7 +836,7 @@ export default function DirectorySettingsModal({
                   Open Discord <ExternalLink className="h-3 w-3" />
                 </a>
               </div>
-              <div className="mt-1 text-[9px] text-slate-500">Community-run support for X4 Forge users; not affiliated with or endorsed by Egosoft. Forge never opens or joins the server automatically.</div>
+              <div className="mt-1 text-[11px] text-slate-400">Community-run support for X4 Forge users; not affiliated with or endorsed by Egosoft. Forge never opens or joins the server automatically.</div>
             </div>
           </DirectoryRow>}
 
@@ -851,7 +862,7 @@ export default function DirectorySettingsModal({
                         : 'bg-[#0F1115] border-white/10 text-slate-300 hover:border-amber-500/30'
                     }`}
                   >
-                    <div className="flex items-center gap-1.5 text-[11px] font-mono font-bold uppercase tracking-wide">
+                    <div className="flex items-center gap-1.5 text-[11px] font-mono font-semibold text-slate-200">
                       {active && <CheckCircle className="w-3 h-3" />}
                       {t.label}
                     </div>
@@ -860,14 +871,14 @@ export default function DirectorySettingsModal({
                 );
               })}
             </div>
-            <p className="text-[9px] text-slate-500 font-sans mt-1.5 leading-relaxed">
+            <p className="text-[11px] text-slate-400 font-sans mt-1.5 leading-relaxed">
               AI is a convenience layer beside Forge's deterministic core, never in front of it. At <span className="text-slate-300 font-mono">Off</span> there is no AI anywhere in the app.
             </p>
             <button
               type="button"
               onClick={onOpenAIConfig}
               title="Provider, model and API key — configurable at any tier, including Off."
-              className="mt-2 w-full px-2.5 py-1.5 rounded border border-amber-500/25 bg-amber-500/[0.04] hover:bg-amber-500/10 hover:border-amber-500/50 text-amber-300 text-[10.5px] font-mono font-bold uppercase tracking-wide transition-all cursor-pointer flex items-center justify-center gap-1.5"
+              className="mt-2 w-full px-2.5 py-1.5 rounded border border-amber-500/30 bg-amber-500/[0.06] hover:bg-amber-500/15 hover:border-amber-400/50 text-amber-200 text-[11px] font-mono font-semibold transition-all cursor-pointer flex items-center justify-center gap-1.5"
             >
               <Sparkles className="w-3 h-3" />
               Configure AI engine — provider, model &amp; API key
@@ -880,7 +891,7 @@ export default function DirectorySettingsModal({
         <div className="shrink-0 border-t border-slate-800 bg-[#11161f] px-4 py-2.5 space-y-2">
           {status.msg && (
             <div
-              className={`p-2 rounded text-[10px] font-mono leading-relaxed border ${
+              className={`p-2.5 rounded text-[11px] font-mono leading-relaxed border ${
                 status.type === 'error'
                   ? 'bg-red-500/10 border-red-500/30 text-red-300'
                   : status.type === 'warn'
@@ -893,7 +904,7 @@ export default function DirectorySettingsModal({
           )}
 
           <div className="flex items-center justify-between gap-3">
-            <span className="text-[10px] text-slate-400 font-sans">
+            <span className="text-[11px] text-slate-400 font-sans">
               {directorySettingsLocked ? 'Project Check approval locks directory paths for this session.' : isolatedScratch
                 ? 'Reference and schema paths are saved in Forge Dev settings.'
                 : 'All directory paths are saved securely on the server config.'}

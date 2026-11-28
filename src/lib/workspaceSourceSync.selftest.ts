@@ -168,6 +168,19 @@ export function runWorkspaceSourceSyncSelftest(): { passed: number; total: numbe
           decideDiskSyncAction({ ...baseArgs, sourceSync: makeDriftStatus({ inSync: true }) }),
           'none',
         );
+        assert.equal(
+          decideDiskSyncAction({
+            ...baseArgs,
+            workspace: { ...ws, sourceStamp: { ...ws.sourceStamp!, hash: 'disk_hash_2' } },
+            sourceSync: makeDriftStatus({
+              stampedHash: 'disk_hash_1',
+              currentHash: 'disk_hash_2',
+              localEditState: 'local-edits',
+              canAutoSync: false,
+            }),
+          }),
+          'none',
+        );
       },
     ],
     [

@@ -143,6 +143,10 @@ export function decideDiskSyncAction(params: {
     return 'none';
   }
 
+  if (sourceSync.currentHash && workspace.sourceStamp?.hash && sourceSync.currentHash === workspace.sourceStamp.hash) {
+    return 'none';
+  }
+
   const clientEditState = classifyLocalEditState(workspace);
   const currentHash = sourceSync.currentHash;
   const canAutoReload = Boolean(

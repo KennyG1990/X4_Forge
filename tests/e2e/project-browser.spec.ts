@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { E2E_API_ORIGIN, E2E_TOKEN } from '../../playwright.config';
-import { ephemeralWorkspaceHeaders, readServerWorkspace } from './ephemeral';
+import { ephemeralWorkspaceHeaders, readServerWorkspace, seedServerWorkspace } from './ephemeral';
+import { buildTemplateWorkspace } from '../../src/lib/modTemplates';
 import type { ModWorkspace } from '../../src/types';
 
 const workspacePath = 'D:\\X4ForgeMods';
@@ -34,7 +35,8 @@ function modChildren(name: string, marker: string) {
 }
 
 test('Load Mod Project browses and imports the explicitly selected source root', async ({ page }) => {
-  const activeWorkspace = await readServerWorkspace();
+  const activeWorkspace = buildTemplateWorkspace('welcome');
+  await seedServerWorkspace(activeWorkspace as unknown as Record<string, unknown>);
   const previewBodies: any[] = [];
   const importBodies: any[] = [];
   const listRequests: string[] = [];
@@ -430,6 +432,20 @@ test('Load Mod Project visibly decomposes a complex multi-script project without
     });
     expect(roundTrip.ok(), await roundTrip.text()).toBeTruthy();
     expect(await roundTrip.json()).toMatchObject({ lossless: true, strictLossless: true, droppedFiles: [] });
+    await page.evaluate((cueId) => {
+      const runtime = (window as unknown as {
+        AgentRuntime?: { updateNodeProperty: (id: string, key: string, value: string) => boolean };
+      }).AgentRuntime;
+      if (!runtime?.updateNodeProperty(cueId, 'label', 'Init (local edit)')) {
+        throw new Error(`Could not mutate node ${cueId} via AgentRuntime`);
+      }
+    }, alphaCue.id);
+    await expect.poll(async () => page.evaluate((cueId) => {
+      const runtime = (window as unknown as {
+        AgentRuntime?: { getCurrentWorkspace: () => { nodes: Array<{ id: string; label?: string }> } };
+      }).AgentRuntime;
+      return runtime?.getCurrentWorkspace().nodes.find(node => node.id === cueId)?.label || '';
+    }, alphaCue.id)).toBe('Init (local edit)');
     fs.writeFileSync(path.join(mod, 'md', 'late_added.xml'), lossyMd('LateAdded', 'LateChild'), 'utf8');
     await expect(sourceInventory).toHaveText('Source MD: 3 files · 1 outside graph', { timeout: 20_000 });
     await expect(sourceInventory).toHaveAttribute('title', 'Source files outside the graph: late_added.xml');

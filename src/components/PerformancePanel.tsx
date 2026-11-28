@@ -235,7 +235,7 @@ export function NativePerformanceStatusView({ report, pending, onStop }: {
     <h3 className="text-xs font-semibold text-slate-200">{native ? 'Native extension host · shared process' : 'Native coverage unavailable'}</h3>
     <p>Process totals include other extensions, including CodeSense when it shares this host. They do not measure X4 or attribute all cost to Forge. Native function profiles are unavailable.</p>
     <p>Availability: {report.availability}{report.unavailableReason ? ` · ${report.unavailableReason}` : ''}. Current control owner: {owner}.</p>
-    {pending && <p role="status" className="text-cyan-200">{pending === 'start' ? 'Starting native collection' : 'Stopping native collection'} — pending execution and cleanup acknowledgement.</p>}
+    {pending && <p role="status" className="text-sky-300">{pending === 'start' ? 'Starting native collection' : 'Stopping native collection'} — pending execution and cleanup acknowledgement.</p>}
     {!native && <p>Native metrics: Unknown. No current producer or capture is confirmed.</p>}
     {native && <>
       <p className="break-all">Backend instance {status!.backendInstanceId} · native instance {native.producer.instanceId} · shared PID {native.producer.pid} · capture {native.captureId ?? 'none'}.</p>
@@ -418,15 +418,15 @@ function NativePerformanceSection({ authority, backendInstanceId, parentRefresh 
   return <section className="rounded border border-white/10 p-3" aria-label="Native performance coverage" data-testid="forge-native-performance">
     <div className="mb-2 flex items-center gap-2"><h3 className="mr-auto text-xs font-semibold">Native performance</h3><button type="button" disabled={busy} onClick={refreshRead} aria-label="Refresh native performance report" className="rounded p-1.5 hover:bg-white/10 disabled:opacity-40"><RefreshCw className="h-3.5 w-3.5" /></button></div>
     {current?.error && <p role="alert" className="mb-2 text-xs text-amber-200">{current.error}{report ? ' Retained native data is stale; controls wait for a current read.' : ''}</p>}
-    {report && !current?.fresh && report.operation === 'read' && !current?.error && <p role="status" className="mb-2 text-[10px] text-amber-200">Retained native data is stale until a current read is confirmed.</p>}
+    {report && !current?.fresh && report.operation === 'read' && !current?.error && <p role="status" className="mb-2 text-[11px] text-amber-200">Retained native data is stale until a current read is confirmed.</p>}
     {report ? <fieldset disabled={controlsStale || busy}><NativePerformanceStatusView report={report} pending={currentAction?.kind} onStop={() => void controlNativeCapture('stop', report)} /></fieldset>
       : <p role="status" className="text-[11px] text-slate-400">Native metrics: Unknown. Reading native status…</p>}
     <fieldset disabled={busy} className="mt-3 space-y-2">
-      <div className="grid grid-cols-2 gap-2"><label className="text-[10px] text-slate-400">Native duration (seconds)<input aria-label="Native performance collection duration seconds" type="number" min="1" max="900" value={duration} onChange={event => setDuration(event.target.value)} className={inputClass} /></label><label className="text-[10px] text-slate-400">Native interval (seconds)<input aria-label="Native performance resource interval seconds" type="number" min="1" max="60" value={interval} onChange={event => setInterval(event.target.value)} className={inputClass} /></label></div>
+      <div className="grid grid-cols-2 gap-2"><label className="text-[11px] text-slate-400">Native duration (seconds)<input aria-label="Native performance collection duration seconds" type="number" min="1" max="900" value={duration} onChange={event => setDuration(event.target.value)} className={inputClass} /></label><label className="text-[11px] text-slate-400">Native interval (seconds)<input aria-label="Native performance resource interval seconds" type="number" min="1" max="60" value={interval} onChange={event => setInterval(event.target.value)} className={inputClass} /></label></div>
       <label className="flex items-center gap-2 text-[11px]"><input type="checkbox" checked={eventLoopDelay} onChange={event => setEventLoopDelay(event.target.checked)} /> Include native event-loop delay monitoring</label>
-      <button type="button" disabled={!canStart || busy} onClick={() => { if (report) void controlNativeCapture('start', report); }} className="inline-flex items-center gap-1 rounded border border-cyan-500/30 px-2 py-1.5 text-xs text-cyan-200 disabled:opacity-40"><Play className="h-3.5 w-3.5" />Start native collection</button>
+      <button type="button" disabled={!canStart || busy} onClick={() => { if (report) void controlNativeCapture('start', report); }} className="inline-flex items-center gap-1 rounded border border-sky-500/35 bg-sky-500/10 px-2.5 py-1.5 text-xs text-sky-200 hover:bg-sky-500/20 disabled:opacity-40"><Play className="h-3.5 w-3.5" />Start native collection</button>
     </fieldset>
-    {currentAction?.notice && <p role="status" className="mt-2 text-xs text-cyan-200">{currentAction.notice}</p>}
+    {currentAction?.notice && <p role="status" className="mt-2 text-xs text-sky-300">{currentAction.notice}</p>}
     {currentAction?.error && <p role="alert" className="mt-2 text-xs text-amber-200">{currentAction.error}</p>}
     {busy && <button type="button" onClick={() => pending.current?.controller.abort()} className="mt-2 text-xs text-slate-300 underline">Cancel native request</button>}
   </section>;
@@ -442,7 +442,7 @@ export function webviewCollectionStartRefusal(collection: WebviewPerformanceView
 }
 export function WebviewCollectionStatus({ collection, onStop }: { collection: WebviewPerformanceView['collection']; onStop: () => void }) {
   const cleanupPending = collection.cleanupUnconfirmed || collection.failedTimerCount > 0 || (!collection.active && collection.ownedTimerCount > 0);
-  return <div className="mt-1 text-[10px] text-slate-400">
+  return <div className="mt-1 text-[11px] text-slate-400">
     <p>Webview collection: {collection.active ? `active until ${time(collection.expiresAtUnixMs)}` : 'inactive'} · owned timers {collection.ownedTimerCount}; failed timer cleanup {collection.failedTimerCount}.</p>
     {cleanupPending && <p className="mt-1 text-amber-200">Webview timer cleanup is unconfirmed. Inactive recording does not confirm cleanup; another collection is refused.</p>}
     {(collection.active || cleanupPending) && <button type="button" onClick={onStop} className="mt-1 inline-flex items-center gap-1 text-slate-300 underline"><Square className="h-3 w-3" />{cleanupPending ? 'Retry webview timer cleanup' : 'Stop webview collection only'}</button>}

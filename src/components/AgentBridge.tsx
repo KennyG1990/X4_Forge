@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Cpu,
   Terminal,
@@ -816,6 +816,22 @@ export default function AgentBridge({
     return () => controller.abort();
   }, [isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
+  const workspaceJsonPreview = useMemo(
+    () => (isOpen && activeTab === 'status' ? JSON.stringify(workspace, null, 2) : ''),
+    [isOpen, activeTab, workspace]
+  );
+
   // Manually apply pending external changes
   const applyPendingChanges = async () => {
     if (pendingWorkspace) {
@@ -843,7 +859,7 @@ export default function AgentBridge({
           </div>
           <div>
             <span className="font-semibold font-sans text-slate-100 text-sm tracking-tight block">AI Agent API Bridge</span>
-            <span className="text-[10.5px] font-sans text-slate-400">Workspace sync, scoped agent keys, action history, and runtime API</span>
+            <span className="text-[11px] font-sans text-slate-400">Workspace sync, scoped agent keys, action history, and runtime API</span>
           </div>
         </div>
         <button 
@@ -887,11 +903,11 @@ export default function AgentBridge({
         data-capability-count={capabilityContract.count}
         data-catalog-scope={capabilityContract.source === 'live' ? 'server' : 'local'}
         title={capabilityContract.contractHash || 'Local catalog only; server capability contract is unknown'}
-        className="px-4 py-2 border-b border-white/5 bg-cyan-950/10 text-[9px] text-slate-400 flex items-center justify-between gap-3"
+        className="px-4 py-2 border-b border-white/5 bg-sky-950/15 text-[11px] text-slate-400 flex items-center justify-between gap-3"
       >
         <span>
           {capabilityContract.source === 'live' ? 'Server capabilities' : 'Local catalog'}:{' '}
-          <strong className="text-cyan-300">{capabilityContract.count}</strong>
+          <strong className="text-sky-300">{capabilityContract.count}</strong>
           {capabilityContract.source === 'live' ? ` · ${capabilityContract.schemaVersion}` : ' · Server capabilities unknown'}
           {capabilityContract.contractHash ? ` · ${capabilityContract.contractHash.slice(0, 12)}` : ''}
         </span>
@@ -911,12 +927,12 @@ export default function AgentBridge({
 
       {/* Sync Alerts */}
       {pendingWorkspace && (
-        <div data-testid="agent-bridge-pending-workspace" className="bg-cyan-500/10 border-b border-cyan-500/20 p-3 flex flex-col gap-2 animate-fade-in">
+        <div data-testid="agent-bridge-pending-workspace" className="bg-sky-500/10 border-b border-sky-500/25 p-3 flex flex-col gap-2 animate-fade-in">
           <div className="flex items-start gap-2">
-            <AlertCircle className="w-4 h-4 text-cyan-400 shrink-0 mt-0.5" />
+            <AlertCircle className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
             <div>
-              <span className="font-bold text-cyan-400 text-[11px] block">EXTERNAL AGENT CHANGE DETECTED</span>
-              <p className="text-[10px] text-slate-300 leading-normal font-sans">
+              <span className="font-semibold text-sky-300 text-xs block">External agent change detected</span>
+              <p className="text-[11px] text-slate-300 leading-normal font-sans">
                 An external AI Agent (Antigravity/Claude) has pushed a modified blueprint of the mod (v{pendingWorkspace.version}).
               </p>
             </div>
@@ -924,13 +940,13 @@ export default function AgentBridge({
           <div className="flex items-center gap-2 self-end">
             <button
               onClick={() => onDiscardPendingWorkspace(pendingWorkspace)}
-              className="px-2.5 py-1 text-[10px] hover:text-white text-slate-400 bg-white/5 rounded border border-white/5 hover:bg-white/10 transition-all font-mono"
+              className="px-2.5 py-1 text-[11px] hover:text-white text-slate-300 bg-white/5 rounded border border-white/10 hover:bg-white/10 transition-all font-mono"
             >
               Discard
             </button>
             <button
               onClick={() => void applyPendingChanges()}
-              className="px-3 py-1 text-[10px] bg-cyan-600/20 hover:bg-cyan-600/30 font-bold border border-cyan-500/30 text-cyan-400 rounded flex items-center gap-1.5 transition-all cursor-pointer font-mono"
+              className="px-3 py-1 text-[11px] bg-sky-600/20 hover:bg-sky-600/30 font-semibold border border-sky-500/35 text-sky-300 rounded flex items-center gap-1.5 transition-all cursor-pointer font-mono"
             >
               <Play className="w-3 h-3" />
               Apply Changes
@@ -945,7 +961,7 @@ export default function AgentBridge({
           onClick={() => setActiveTab('docs')}
           className={`flex-1 py-1.5 rounded font-mono text-[11px] font-bold transition-all cursor-pointer ${
             activeTab === 'docs' 
-              ? 'bg-cyan-600/20 text-cyan-400 border border-cyan-500/30' 
+              ? 'bg-sky-500/15 text-sky-300 border border-sky-500/30' 
               : 'text-slate-400 hover:text-white'
           }`}
         >
@@ -1010,10 +1026,10 @@ export default function AgentBridge({
         {activeTab === 'history' && (
           <div className="space-y-3" data-testid="agent-history-panel">
             <div className="flex items-center justify-between">
-              <div className="text-emerald-400 font-mono text-[11px] font-bold tracking-wider">ACTION HISTORY</div>
+              <div className="text-emerald-400 font-mono text-[11px] font-semibold">Action history</div>
               <button
                 onClick={() => void loadHistory()}
-                className="text-[10px] font-mono px-2 py-1 rounded border border-white/10 text-slate-400 hover:text-white hover:border-white/30 cursor-pointer"
+                className="text-[11px] font-mono px-2 py-1 rounded border border-white/10 text-slate-300 hover:text-white hover:border-white/30 cursor-pointer"
               >
                 Refresh
               </button>
@@ -1021,19 +1037,19 @@ export default function AgentBridge({
 
             {/* Scope discipline: this must never be mistaken for version control. */}
             {historyNote && (
-              <div className="text-[9.5px] font-mono text-slate-500 border-l-2 border-slate-700 pl-2 leading-relaxed">
+              <div className="text-[11px] font-mono text-slate-400 border-l-2 border-slate-700 pl-2 leading-relaxed">
                 {historyNote}
               </div>
             )}
 
             {historyError && (
-              <div className="text-[10px] font-mono text-red-400 border border-red-500/30 bg-red-500/5 rounded p-2" role="alert">
+              <div className="text-[11px] font-mono text-rose-300 border border-rose-500/30 bg-rose-500/10 rounded p-2" role="alert">
                 {historyError}
               </div>
             )}
 
             {historyWarning && (
-              <div className="text-[10px] font-mono text-amber-300 border border-amber-500/30 bg-amber-500/5 rounded p-2" role="status">
+              <div className="text-[11px] font-mono text-amber-300 border border-amber-500/30 bg-amber-500/5 rounded p-2" role="status">
                 {historyWarning.message} <span className="break-all">{historyWarning.backupPath}</span>
               </div>
             )}
@@ -1042,7 +1058,7 @@ export default function AgentBridge({
               <select
                 value={historyKindFilter}
                 onChange={e => setHistoryKindFilter(e.target.value)}
-                className="bg-[#0f131c] border border-white/10 rounded text-[10px] font-mono text-slate-300 px-2 py-1"
+                className="bg-[#0f131c] border border-white/10 rounded text-[11px] font-mono text-slate-300 px-2 py-1"
                 aria-label="Filter by action kind"
               >
                 <option value="">all kinds</option>
@@ -1051,7 +1067,7 @@ export default function AgentBridge({
               <select
                 value={historyOutcomeFilter}
                 onChange={e => setHistoryOutcomeFilter(e.target.value)}
-                className="bg-[#0f131c] border border-white/10 rounded text-[10px] font-mono text-slate-300 px-2 py-1"
+                className="bg-[#0f131c] border border-white/10 rounded text-[11px] font-mono text-slate-300 px-2 py-1"
                 aria-label="Filter by outcome"
               >
                 <option value="">all outcomes</option>
@@ -1062,12 +1078,12 @@ export default function AgentBridge({
                 onChange={e => setHistoryFileFilter(e.target.value)}
                 placeholder="filter by file…"
                 aria-label="Filter by file path"
-                className="flex-1 min-w-[140px] bg-[#0f131c] border border-white/10 rounded text-[10px] font-mono text-slate-300 px-2 py-1"
+                className="flex-1 min-w-[140px] bg-[#0f131c] border border-white/10 rounded text-[11px] font-mono text-slate-300 px-2 py-1"
               />
             </div>
 
             {historyRows.length === 0 && !historyError && (
-              <div className="text-[10px] font-mono text-slate-500 py-6 text-center">
+              <div className="text-[11px] font-mono text-slate-400 py-6 text-center">
                 No actions recorded yet. Edits, imports, validations, compiles, deploys and packages appear here.
               </div>
             )}
@@ -1088,13 +1104,13 @@ export default function AgentBridge({
                       aria-expanded={open}
                     >
                       <div className="flex items-start gap-2">
-                        <span className="text-[9px] font-mono text-slate-600 shrink-0 w-[52px] pt-0.5">
+                        <span className="text-[11px] font-mono text-slate-500 shrink-0 w-[60px] pt-0.5">
                           {new Date(row.ts).toLocaleTimeString()}
                         </span>
-                        <span className="text-[9px] font-mono text-slate-500 shrink-0 w-[70px] pt-0.5 truncate" title={row.agent?.label}>
+                        <span className="text-[11px] font-mono text-slate-400 shrink-0 w-[76px] pt-0.5 truncate" title={row.agent?.label}>
                           {row.agent?.label}
                         </span>
-                        <span className="text-[9px] font-mono text-cyan-500/70 shrink-0 w-[52px] pt-0.5">{row.kind}</span>
+                        <span className="text-[11px] font-mono text-sky-400/80 shrink-0 w-[56px] pt-0.5">{row.kind}</span>
                         <span className="text-[11px] font-mono text-slate-200 flex-1 leading-relaxed">{row.title}</span>
                         <span className={`text-[8.5px] font-mono font-bold px-1.5 py-0.5 rounded border shrink-0 ${badge}`}>
                           {String(row.outcome?.status || '').toUpperCase()}
@@ -1123,13 +1139,13 @@ export default function AgentBridge({
                                 onClick={() => setFocusNodeRequest?.({ nodeId: n.id, timestamp: Date.now() })}
                                 title={`Focus ${n.label || n.id} on the canvas`}
                                 data-testid="history-node-chip"
-                                className="text-[9px] font-mono px-1.5 py-0.5 rounded border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/15 cursor-pointer"
+                                className="text-[11px] font-mono px-2 py-0.5 rounded border border-sky-500/35 text-sky-300 hover:bg-sky-500/15 cursor-pointer"
                               >
                                 {n.label || n.id}
                               </button>
                             ))}
                             {row.nodes.length > 12 && (
-                              <span className="text-[9px] font-mono text-slate-600">+{row.nodes.length - 12} more</span>
+                              <span className="text-[11px] font-mono text-slate-400">+{row.nodes.length - 12} more</span>
                             )}
                           </div>
                         )}
@@ -1142,7 +1158,7 @@ export default function AgentBridge({
                           <button
                             onClick={() => void revertToRow(row)}
                             disabled={revertBusy === row.id}
-                            className="text-[10px] font-mono px-2 py-1 rounded border border-amber-500/40 text-amber-400 hover:bg-amber-500/10 disabled:opacity-50 cursor-pointer"
+                            className="text-[11px] font-mono px-2 py-1 rounded border border-amber-500/40 text-amber-300 hover:bg-amber-500/10 disabled:opacity-50 cursor-pointer"
                           >
                             {revertBusy === row.id
                               ? 'Restoring…'
@@ -1174,7 +1190,7 @@ export default function AgentBridge({
                                         {d.severity === 'error' ? 'ERR' : d.severity === 'warning' ? 'WARN' : 'INFO'}
                                       </span>
                                       <span className="text-slate-300 break-all">
-                                        {d.filePath ? <span className="text-cyan-400">{d.filePath}{d.line ? `:${d.line}` : ''}</span> : null}
+                                        {d.filePath ? <span className="text-sky-400">{d.filePath}{d.line ? `:${d.line}` : ''}</span> : null}
                                         {d.filePath ? ' — ' : ''}{d.message}
                                         {d.code ? <span className="text-slate-600"> [{d.code}]</span> : null}
                                       </span>
@@ -1185,7 +1201,7 @@ export default function AgentBridge({
                             }
                           }
                           return (
-                            <pre className="text-[9.5px] font-mono text-slate-400 bg-[#070a0f] rounded p-2 max-h-[240px] overflow-auto whitespace-pre-wrap break-all">
+                            <pre className="text-[11px] font-mono text-slate-400 bg-[#070a0f] rounded p-2 max-h-[240px] overflow-auto whitespace-pre-wrap break-all">
                               {rowDetail.content.length > 20000 ? `${rowDetail.content.slice(0, 20000)}\n… (truncated for display)` : rowDetail.content}
                             </pre>
                           );
@@ -1208,7 +1224,7 @@ export default function AgentBridge({
             {/* Core introduction info */}
             <div className="rounded-lg bg-white/[0.02] border border-white/5 p-3 font-sans leading-relaxed text-[11px]">
               <h4 className="text-white font-bold mb-1 font-mono flex items-center gap-1.5">
-                <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+                <Terminal className="w-3.5 h-3.5 text-sky-400" />
                 HOW AGENTS RUN THIS STUDIO
               </h4>
               <p className="text-slate-400">
@@ -1217,8 +1233,8 @@ export default function AgentBridge({
             </div>
 
             {/* Sync Settings Card */}
-            <div className="p-3 bg-[#111622] rounded-lg border border-cyan-500/20 flex flex-col gap-2 font-mono">
-              <span className="text-xs font-bold text-white uppercase tracking-wide">SYNC BRIDGE SETTINGS</span>
+            <div className="p-3 bg-[#111622] rounded-lg border border-sky-500/25 flex flex-col gap-2 font-mono">
+              <span className="text-xs font-semibold text-slate-100">Sync bridge settings</span>
               <div className="flex items-center justify-between text-[11px] py-1">
                 <span className="text-slate-400">Auto-Apply Agent Modifications</span>
                 <button 
@@ -1228,18 +1244,18 @@ export default function AgentBridge({
                 >
                   {autoSync ? (
                     <div className="flex items-center gap-1 text-emerald-400">
-                      <span className="text-[10px] font-bold uppercase">ON</span>
+                      <span className="text-[11px] font-bold">ON</span>
                       <ToggleRight className="w-7 h-7" />
                     </div>
                   ) : (
                     <div className="flex items-center gap-1 text-slate-500">
-                      <span className="text-[10px] font-bold uppercase">OFF</span>
+                      <span className="text-[11px] font-bold">OFF</span>
                       <ToggleLeft className="w-7 h-7" />
                     </div>
                   )}
                 </button>
               </div>
-              <p className="text-[10px] text-slate-400 font-sans leading-normal">
+              <p className="text-[11px] text-slate-400 font-sans leading-normal">
                 {autoSync 
                   ? "When enabled, any visual blueprints sent by an external AI will instantly draw and refresh the canvas on your screen."
                   : "When disabled, you will get a visual banner to approve or discard changes before applying."}
@@ -1248,7 +1264,7 @@ export default function AgentBridge({
 
             {/* API Endpoints Section */}
             <div className="space-y-2 font-mono text-[11px]">
-              <span className="text-[10px] text-slate-400 uppercase font-bold tracking-widest block mb-1">AVAILABLE API ROUTES</span>
+              <span className="text-[11px] text-slate-300 font-semibold block mb-1">Available API routes</span>
               
               {/* ENDPOINT 1: GET SCHEMA */}
               <div className="border border-white/5 rounded-lg bg-black/35 overflow-hidden">
@@ -1257,7 +1273,7 @@ export default function AgentBridge({
                   className="w-full text-left p-2.5 bg-[#12161f] flex items-center justify-between hover:bg-white/[0.02]"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">GET</span>
+                    <span className="px-1.5 py-0.5 rounded text-[11px] font-semibold bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">GET</span>
                     <span className="text-white text-xs font-bold font-mono">/api/agent/schema</span>
                   </div>
                   {collapsedEndpoints.schema ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
@@ -1265,11 +1281,11 @@ export default function AgentBridge({
                 
                 {!collapsedEndpoints.schema && (
                   <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
-                    <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
+                    <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
                       Public read-only contract for external agents: supported domains, endpoint catalog, auth rules, constants, templates, and compile response shape.
                     </p>
                     <div className="relative">
-                      <pre className="bg-[#10141f] p-2 rounded text-[10px] text-cyan-300 overflow-x-auto w-full select-all">
+                      <pre className="bg-[#10141f] p-2 rounded text-[11px] text-sky-300 overflow-x-auto w-full select-all">
                         {`curl -X GET "${appOrigin}/api/agent/schema"`}
                       </pre>
                       <button 
@@ -1290,7 +1306,7 @@ export default function AgentBridge({
                   className="w-full text-left p-2.5 bg-[#12161f] flex items-center justify-between hover:bg-white/[0.02]"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">GET</span>
+                    <span className="px-1.5 py-0.5 rounded text-[11px] font-semibold bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">GET</span>
                     <span className="text-white text-xs font-bold font-mono">/api/agent/workspace</span>
                   </div>
                   {collapsedEndpoints.getWorkspace ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
@@ -1298,11 +1314,11 @@ export default function AgentBridge({
                 
                 {!collapsedEndpoints.getWorkspace && (
                   <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
-                    <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
+                    <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
                       Retrieves the explicitly addressed workspace. Mod names are editable; the immutable workspace ID is the authority.
                     </p>
                     <div className="relative">
-                      <pre className="bg-[#10141f] p-2 rounded text-[10px] text-cyan-300 overflow-x-auto w-full select-all">
+                      <pre className="bg-[#10141f] p-2 rounded text-[11px] text-sky-300 overflow-x-auto w-full select-all">
                         {`curl.exe -X GET "${appOrigin}/api/agent/workspace" ${authCurlHeader} ${workspaceCurlHeader} ${clientCurlHeader}`}
                       </pre>
                       <button 
@@ -1323,7 +1339,7 @@ export default function AgentBridge({
                   className="w-full text-left p-2.5 bg-[#12161f] flex items-center justify-between hover:bg-white/[0.02]"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-cyan-600/20 text-cyan-400 border border-cyan-500/30">POST</span>
+                    <span className="px-1.5 py-0.5 rounded text-[11px] font-semibold bg-sky-600/20 text-sky-300 border border-sky-500/35">POST</span>
                     <span className="text-white text-xs font-bold font-mono">/api/agent/workspace</span>
                   </div>
                   {collapsedEndpoints.postWorkspace ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
@@ -1331,11 +1347,11 @@ export default function AgentBridge({
                 
                 {!collapsedEndpoints.postWorkspace && (
                   <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
-                    <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
+                    <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
                        Publishes a full ModWorkspace JSON structure directly into the studio, including optional tFiles, aiScripts, wares, jobs, and xmlPatches.
                     </p>
                     <div className="relative">
-                      <pre className="bg-[#10141f] p-2 rounded text-[9px] text-cyan-300 overflow-y-auto max-h-32 select-all">
+                      <pre className="bg-[#10141f] p-2 rounded text-[11px] text-sky-300 overflow-y-auto max-h-32 select-all">
                         {`curl.exe -X POST "${appOrigin}/api/agent/workspace" ${authCurlHeader} ${workspaceCurlHeader} ${clientCurlHeader} -H "Content-Type: application/json" -d '{"workspace":{"name":"Bounty_Hunter_Mod","nodes":[],"links":[],"uiWidgets":[]},"expectedHead":"<workspaceHash from GET>","expectedSnapshotHash":"<snapshotHash from GET>"}'`}
                       </pre>
                       <button 
@@ -1350,35 +1366,35 @@ export default function AgentBridge({
               </div>
 
               {/* ENDPOINT 4: GET DEBUG WATCHER BRIEF */}
-              <div className="border border-cyan-500/10 rounded-lg bg-black/35 overflow-hidden">
+              <div className="border border-sky-500/15 rounded-lg bg-black/35 overflow-hidden">
                 <button
                   onClick={() => toggleEndpoint('debugWatcher')}
                   className="w-full text-left p-2.5 bg-[#12161f] flex items-center justify-between hover:bg-white/[0.02]"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">GET</span>
+                    <span className="px-1.5 py-0.5 rounded text-[11px] font-semibold bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">GET</span>
                     <span className="text-white text-xs font-bold font-mono">/api/agent/debug-watcher/brief</span>
                   </div>
                   {collapsedEndpoints.debugWatcher ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
                 </button>
 
                 {!collapsedEndpoints.debugWatcher && (
-                  <div className="p-3 border-t border-cyan-500/10 space-y-2 bg-[#071013]">
-                    <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
+                  <div className="p-3 border-t border-sky-500/15 space-y-2 bg-[#071013]">
+                    <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
                       Headless version of the Game Debug Log Watcher for agents and users: active-mod status, high-signal timeline, expected cue/marker chain, deploy freshness, and copyable evidence artifact.
                     </p>
-                    <div className="grid grid-cols-2 gap-2 text-[10px] font-sans text-slate-400">
+                    <div className="grid grid-cols-2 gap-2 text-[11px] font-sans text-slate-400">
                       <div className="rounded bg-black/30 border border-white/5 p-2">
-                        <span className="block font-mono font-bold text-cyan-300 uppercase mb-1">Query</span>
+                        <span className="block font-mono font-semibold text-sky-300 mb-1">Query</span>
                         <span><code className="text-slate-200">modId</code> scopes the log to a mod id or marker.</span>
                       </div>
                       <div className="rounded bg-black/30 border border-white/5 p-2">
-                        <span className="block font-mono font-bold text-cyan-300 uppercase mb-1">Expect</span>
+                        <span className="block font-mono font-semibold text-sky-300 mb-1">Expect</span>
                         <span><code className="text-slate-200">expect</code> is a comma-separated cue/marker chain to prove.</span>
                       </div>
                     </div>
                     <div className="relative">
-                      <pre className="bg-[#10141f] p-2 rounded text-[10px] text-cyan-300 overflow-x-auto w-full select-all">
+                      <pre className="bg-[#10141f] p-2 rounded text-[11px] text-sky-300 overflow-x-auto w-full select-all">
                         {`curl.exe -X GET "${appOrigin}/api/agent/debug-watcher/brief?modId=ai_influence&expect=Save_identity,Chat_boot,Poll_tick,On_action" ${authCurlHeader}`}
                       </pre>
                       <button
@@ -1399,7 +1415,7 @@ export default function AgentBridge({
                   className="w-full text-left p-2.5 bg-[#12161f] flex items-center justify-between hover:bg-white/[0.02]"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#df9825]/20 text-[#df9825] border border-[#df9825]/30">POST</span>
+                    <span className="px-1.5 py-0.5 rounded text-[11px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/35">POST</span>
                     <span className="text-white text-xs font-bold font-mono">/api/agent/generate/preview</span>
                   </div>
                   {collapsedEndpoints.generate ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
@@ -1407,11 +1423,11 @@ export default function AgentBridge({
                 
                 {!collapsedEndpoints.generate && (
                   <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
-                    <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
+                    <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
                       Previews a server-side AI proposal without applying it. This can use the network and provider quota; workspace mutation still requires the separate approval path.
                     </p>
                     <div className="relative">
-                      <pre className="bg-[#10141f] p-2 rounded text-[10px] text-cyan-300 overflow-x-auto w-full select-all">
+                      <pre className="bg-[#10141f] p-2 rounded text-[11px] text-sky-300 overflow-x-auto w-full select-all">
                         {`curl.exe -X POST "${appOrigin}/api/agent/generate/preview" ${authCurlHeader} ${workspaceCurlHeader} ${clientCurlHeader} ${providerCurlHeaders} -H "Content-Type: application/json" -d '{"prompt":"Create custom mission with Elite Fighter wing escort","apply":false}'`}
                       </pre>
                       <button 
@@ -1432,7 +1448,7 @@ export default function AgentBridge({
                   className="w-full text-left p-2.5 bg-[#12161f] flex items-center justify-between hover:bg-white/[0.02]"
                 >
                   <div className="flex items-center gap-2">
-                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#df9825]/20 text-[#df9825] border border-[#df9825]/30">POST</span>
+                    <span className="px-1.5 py-0.5 rounded text-[11px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/35">POST</span>
                     <span className="text-white text-xs font-bold font-mono">/api/agent/compile</span>
                   </div>
                   {collapsedEndpoints.compile ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
@@ -1440,11 +1456,11 @@ export default function AgentBridge({
                 
                 {!collapsedEndpoints.compile && (
                   <div className="p-3 border-t border-white/5 space-y-2 bg-[#0a0c11]">
-                    <p className="text-[10px] text-slate-400 font-sans leading-relaxed">
+                    <p className="text-[11px] text-slate-400 font-sans leading-relaxed">
                       Sends any workspace payload to generate a complete package file manifest: content.xml, README, MD XML, UI XML, AI scripts, library diffs, translations, and XML patches.
                     </p>
                     <div className="relative">
-                      <pre className="bg-[#10141f] p-2 rounded text-[10px] text-cyan-300 overflow-x-auto w-full select-all">
+                      <pre className="bg-[#10141f] p-2 rounded text-[11px] text-sky-300 overflow-x-auto w-full select-all">
                         {`curl.exe -X POST "${appOrigin}/api/agent/compile" ${authCurlHeader} ${workspaceCurlHeader} ${clientCurlHeader} -H "Content-Type: application/json" -d '{}'`}
                       </pre>
                       <button 
@@ -1486,7 +1502,7 @@ export default function AgentBridge({
 
             {/* Create form */}
             <div className="rounded-lg bg-white/[0.02] border border-white/5 p-3 space-y-2">
-              <div className="font-mono text-[10px] text-slate-400 font-bold">CREATE A KEY</div>
+              <div className="font-mono text-[11px] text-slate-300 font-semibold">Create a key</div>
               <div className="flex flex-wrap gap-2 items-center">
                 <input
                   data-testid="agent-key-label"
@@ -1529,18 +1545,18 @@ export default function AgentBridge({
                   Generate
                 </button>
               </div>
-              <label className="flex items-start gap-2 rounded border border-cyan-500/20 bg-cyan-500/[0.04] px-2.5 py-2 cursor-pointer">
+              <label className="flex items-start gap-2 rounded border border-sky-500/25 bg-sky-500/[0.05] px-2.5 py-2 cursor-pointer">
                 <input
                   data-testid="agent-key-custom-toggle"
                   type="checkbox"
                   checked={customKeyAuthority}
                   onChange={(event) => setCustomAuthorityEnabled(event.target.checked)}
                   disabled={agentCapabilityOptions.length === 0}
-                  className="mt-0.5 accent-cyan-400"
+                  className="mt-0.5 accent-sky-400"
                 />
                 <span>
-                  <span className="block font-mono text-[10px] font-bold text-cyan-300">LIMIT TO AN EXACT CAPABILITY CONTRACT (ADVANCED)</span>
-                  <span className="block text-[10px] text-slate-400 mt-0.5">
+                  <span className="block font-mono text-[11px] font-semibold text-sky-300">Limit to an exact capability contract (advanced)</span>
+                  <span className="block text-[11px] text-slate-400 mt-0.5">
                     Off keeps the normal scope preset. On freezes exact <code>capability.id@version</code> choices and allowed effects;
                     protected Agent API routes without a canonical contract stop working. Public localhost reads remain public.
                     Change it later by revoking and recreating the key.
@@ -1548,9 +1564,9 @@ export default function AgentBridge({
                 </span>
               </label>
               {customKeyAuthority && (
-                <div data-testid="agent-key-custom-authority" className="rounded border border-cyan-500/20 bg-black/25 p-2.5 space-y-2">
+                <div data-testid="agent-key-custom-authority" className="rounded border border-sky-500/25 bg-black/25 p-2.5 space-y-2">
                   <div>
-                    <div className="font-mono text-[9px] font-bold text-slate-300 mb-1">EXACT PROTECTED CAPABILITIES</div>
+                    <div className="font-mono text-[11px] font-semibold text-slate-300 mb-1">Exact protected capabilities</div>
                     <div className="grid grid-cols-1 gap-1">
                       {eligibleCapabilityOptions.map(option => {
                         const checked = selectedCapabilityIdentities.includes(option.identity);
@@ -1562,13 +1578,13 @@ export default function AgentBridge({
                               type="checkbox"
                               checked={checked}
                               onChange={() => toggleCapabilityIdentity(option.identity)}
-                              className="mt-0.5 accent-cyan-400"
+                              className="mt-0.5 accent-sky-400"
                             />
                             <span className="min-w-0">
                               <span className="block text-slate-200">{option.title}</span>
-                              <code className="block text-[9px] text-slate-500">{option.identity} · {option.effects.join(', ')}</code>
+                              <code className="block text-[11px] text-slate-400">{option.identity} · {option.effects.join(', ')}</code>
                               {checked && blockedEffects.length > 0 && (
-                                <span className="block text-[9px] text-amber-300">blocked until allowed: {blockedEffects.join(', ')}</span>
+                                <span className="block text-[11px] text-amber-300">blocked until allowed: {blockedEffects.join(', ')}</span>
                               )}
                             </span>
                           </label>
@@ -1577,13 +1593,13 @@ export default function AgentBridge({
                     </div>
                   </div>
                   <div>
-                    <div className="font-mono text-[9px] font-bold text-slate-300 mb-1">ALLOWED EFFECTS</div>
+                    <div className="font-mono text-[11px] font-semibold text-slate-300 mb-1">Allowed effects</div>
                     {selectableEffects.length === 0 ? (
-                      <p className="text-[9px] text-slate-500">No protected capability selected; this key will reach public capabilities only.</p>
+                      <p className="text-[11px] text-slate-400">No protected capability selected; this key will reach public capabilities only.</p>
                     ) : (
                       <div className="flex flex-wrap gap-1.5">
                         {selectableEffects.map(effect => (
-                          <label key={effect} className="flex items-center gap-1 rounded border border-white/10 px-1.5 py-1 font-mono text-[9px] text-slate-300 cursor-pointer">
+                          <label key={effect} className="flex items-center gap-1 rounded border border-white/10 px-2 py-1 font-mono text-[11px] text-slate-300 cursor-pointer">
                             <input
                               data-testid={`agent-key-effect-${effect}`}
                               type="checkbox"
@@ -1591,27 +1607,27 @@ export default function AgentBridge({
                               onChange={() => setSelectedAllowedEffects(previous => previous.includes(effect)
                                 ? previous.filter(candidate => candidate !== effect)
                                 : agentEffectOptions.filter(candidate => candidate === effect || previous.includes(candidate)))}
-                              className="accent-cyan-400"
+                              className="accent-sky-400"
                             />
                             {effect}
                           </label>
                         ))}
                       </div>
                     )}
-                    <p className="text-[9px] text-slate-500 mt-1">
+                    <p className="text-[11px] text-slate-400 mt-1">
                       A capability is callable only when it is checked and every effect printed beside it is allowed.
                     </p>
                   </div>
                 </div>
               )}
-              <p className="text-slate-500 text-[10px]">
+              <p className="text-slate-400 text-[11px]">
                 read = inspect only · write = edit/compile/validate/package (no deploys, no spend) ·
                 deploy = exact reviewed deploy/recovery, guarded filesystem, and caller-key AI routes. Credentials,
                 settings, GitHub, Steam handoff, human receipts, and command execution always require the Studio.
                 Every key is bound to <code>{workspaceId}</code> and follows the current policy.
               </p>
               {agentAuthority && (
-                <p data-testid="agent-authority-policy" className="text-slate-600 text-[9px] font-mono">
+                <p data-testid="agent-authority-policy" className="text-slate-400 text-[11px] font-mono">
                   {agentAuthority.version} · {agentAuthority.hash.slice(0, 12)} · existing keys follow current policy
                 </p>
               )}
@@ -1620,7 +1636,7 @@ export default function AgentBridge({
             {/* One-time reveal */}
             {createdKey && (
               <div data-testid="agent-key-reveal" className="rounded-lg bg-amber-500/10 border border-amber-500/40 p-3 space-y-2">
-                <div className="font-mono text-[10px] text-amber-300 font-bold">
+                <div className="font-mono text-[11px] text-amber-300 font-bold">
                   KEY FOR “{createdKey.label}” — COPY IT NOW, IT WILL NOT BE SHOWN AGAIN
                 </div>
                 <div className="flex gap-2 items-center">
@@ -1642,11 +1658,11 @@ export default function AgentBridge({
                     <X className="w-3.5 h-3.5 text-slate-300" />
                   </button>
                 </div>
-                <p className="text-[10px] text-amber-200/70 font-mono">
+                <p className="text-[11px] text-amber-200/80 font-mono">
                   Use both <code>Authorization: Bearer {'<key>'}</code> and <code>x-workspace-id: {workspaceId}</code>.
                 </p>
                 {createdKey.contractOnly && (
-                  <p data-testid="agent-key-created-contract-only" className="text-[10px] text-cyan-200/80 font-mono">
+                  <p data-testid="agent-key-created-contract-only" className="text-[11px] text-sky-200 font-mono">
                     Contract-only key: only its exact selected protected capabilities can be called; noncanonical protected routes are denied.
                   </p>
                 )}
@@ -1661,7 +1677,7 @@ export default function AgentBridge({
 
             {/* Key table */}
             <div className="rounded-lg bg-white/[0.02] border border-white/5 p-3">
-              <div className="font-mono text-[10px] text-slate-400 font-bold mb-2">
+              <div className="font-mono text-[11px] text-slate-400 font-bold mb-2">
                 ISSUED KEYS ({agentKeys.length})
               </div>
               {agentKeys.length === 0 ? (
@@ -1672,15 +1688,15 @@ export default function AgentBridge({
                     const expired = k.expiresAt !== null && Date.now() >= k.expiresAt;
                     const dead = k.revokedAt !== null || expired;
                     return (
-                      <div key={k.id} className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded border px-2 py-1.5 font-mono text-[10px] ${dead ? 'border-white/5 bg-black/20 text-slate-600' : 'border-white/10 bg-black/30 text-slate-300'}`}>
+                      <div key={k.id} className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded border px-2 py-1.5 font-mono text-[11px] ${dead ? 'border-white/5 bg-black/20 text-slate-500' : 'border-white/10 bg-black/30 text-slate-300'}`}>
                         <span className={`font-bold ${dead ? '' : 'text-white'}`}>{k.label}</span>
-                        <span className={`px-1.5 rounded border ${k.scope === 'deploy' ? 'border-red-500/40 text-red-300' : k.scope === 'write' ? 'border-cyan-500/40 text-cyan-300' : 'border-emerald-500/40 text-emerald-300'}`}>{k.scope}</span>
+                        <span className={`px-1.5 rounded border ${k.scope === 'deploy' ? 'border-red-500/40 text-red-300' : k.scope === 'write' ? 'border-sky-500/40 text-sky-300' : 'border-emerald-500/40 text-emerald-300'}`}>{k.scope}</span>
                         <span>#{k.hashPrefix}</span>
                         <span>{k.workspaceId ? `workspace ${k.workspaceId.slice(-6)}` : 'legacy unbound'}</span>
                         {k.capabilityConstraint && (
                           <span
                             data-testid={`agent-key-contract-${k.label}`}
-                            className="px-1.5 rounded border border-cyan-500/30 text-cyan-300"
+                            className="px-1.5 rounded border border-sky-500/35 text-sky-300"
                             title={`${k.capabilityConstraint.capabilityIdentities.join(', ')} · effects: ${k.capabilityConstraint.allowedEffects.join(', ') || 'none'}`}
                           >
                             contract-only · {k.capabilityConstraint.capabilityIdentities.length} cap{k.capabilityConstraint.capabilityIdentities.length === 1 ? '' : 's'} · {k.capabilityConstraint.allowedEffects.length} effects
@@ -1723,7 +1739,7 @@ export default function AgentBridge({
             {/* #96 Owner approval queue for bounded configuration access sessions */}
             {configAccessRequests.length > 0 && (
               <div className="rounded-lg bg-white/[0.02] border border-amber-500/20 p-3" data-testid="config-access-requests">
-                <div className="font-mono text-[10px] text-amber-300 font-bold mb-2">
+                <div className="font-mono text-[11px] text-amber-300 font-bold mb-2">
                   CONFIGURATION ACCESS REQUESTS ({configAccessRequests.length})
                 </div>
                 <div className="space-y-2">
@@ -1735,7 +1751,7 @@ export default function AgentBridge({
                       <div
                         key={reqRow.requestId}
                         data-testid={`config-access-row-${reqRow.operationId}`}
-                        className="rounded border border-white/10 bg-black/30 px-2.5 py-2 font-mono text-[10px] text-slate-300 space-y-1"
+                        className="rounded border border-white/10 bg-black/30 px-2.5 py-2 font-mono text-[11px] text-slate-300 space-y-1"
                       >
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-bold text-white">{keyLabel}</span>
@@ -1771,7 +1787,7 @@ export default function AgentBridge({
                           )}
                         </div>
                         {rootEntries.length > 0 && (
-                          <div className="text-[9.5px] text-slate-400 break-all">
+                          <div className="text-[11px] text-slate-400 break-all">
                             {rootEntries.map(([field, roots]) => `${field}: ${roots.join(', ')}`).join(' · ')}
                           </div>
                         )}
@@ -1787,18 +1803,18 @@ export default function AgentBridge({
         {activeTab === 'status' && (
           <div className="space-y-4">
             <div className="p-3 bg-slate-900/60 border border-white/5 rounded-lg space-y-1 text-[11px] font-sans text-slate-400 leading-normal">
-              <span className="font-bold text-slate-200 block uppercase font-mono text-[10px] tracking-wider">CURRENT ACTIVE BLUEPRINT SCHEMA</span>
+              <span className="font-semibold text-slate-200 block font-mono text-[11px]">Current active blueprint schema</span>
               <p>
                 This represents the active, synchronized JSON payload currently loaded inside the editor. Any adjustments are instantly reflected here.
               </p>
             </div>
 
             <div className="relative">
-              <pre className="bg-[#05070a] border border-white/10 p-3.5 rounded-lg text-[10px] text-cyan-400 overflow-y-auto max-h-[360px] leading-relaxed">
-                {JSON.stringify(workspace, null, 2)}
+              <pre className="bg-[#05070a] border border-white/10 p-3.5 rounded-lg text-[11px] text-sky-300 overflow-y-auto max-h-[360px] leading-relaxed">
+                {workspaceJsonPreview}
               </pre>
               <button 
-                onClick={() => handleCopy(JSON.stringify(workspace, null, 2), 'raw_json')}
+                onClick={() => handleCopy(workspaceJsonPreview, 'raw_json')}
                 className="absolute right-3 top-3 p-1.5 rounded bg-[#10141f] border border-white/10 hover:bg-black text-slate-400 hover:text-white transition-all cursor-pointer"
                 title="Copy entire JSON schema to clipboard"
               >
@@ -1806,9 +1822,9 @@ export default function AgentBridge({
               </button>
             </div>
 
-            <div className="flex justify-between items-center bg-white/[0.02] border border-white/5 rounded-lg p-3 text-[10px] font-sans leading-relaxed text-slate-400">
+            <div className="flex justify-between items-center bg-white/[0.02] border border-white/5 rounded-lg p-3 text-[11px] font-sans leading-relaxed text-slate-400">
               <div>
-                <span className="font-bold text-slate-300 block mb-0.5 uppercase font-mono">DENSITY METRICS:</span>
+                <span className="font-semibold text-slate-300 block mb-0.5 font-mono">Density metrics:</span>
                 <p>Nodes: <span className="text-white font-bold">{workspace.nodes.length}</span></p>
                 <p>Wires: <span className="text-white font-bold">{workspace.links.length}</span></p>
                 <p>HUD Widgets: <span className="text-white font-bold">{workspace.uiWidgets.length}</span></p>
@@ -1824,7 +1840,7 @@ export default function AgentBridge({
                   a.click();
                   document.body.removeChild(a);
                 }}
-                className="px-2.5 py-1.5 bg-cyan-800/20 border border-cyan-500/30 text-cyan-400 rounded hover:bg-cyan-800/30 transition-all font-mono font-bold uppercase cursor-pointer"
+                className="px-2.5 py-1.5 bg-sky-600/20 border border-sky-500/35 text-sky-300 rounded hover:bg-sky-600/30 transition-all font-mono font-semibold text-[11px] cursor-pointer"
               >
                 Save JSON File
               </button>
@@ -1839,7 +1855,7 @@ export default function AgentBridge({
           <div className="space-y-4 animate-fade-in font-mono">
             {/* Header / Intro */}
             <div className="p-3 bg-emerald-950/20 border border-emerald-500/20 rounded-lg space-y-1 text-[11px] font-sans text-slate-300">
-              <span className="font-bold text-emerald-400 block uppercase font-mono text-[10px] tracking-wider">⚡ SURGICAL RUNTIME EXECUTOR</span>
+              <span className="font-semibold text-emerald-400 block font-mono text-[11px]">Surgical runtime executor</span>
               <p className="leading-relaxed">
                 Connect external digital copilots or run custom natural language commands to update workspace states surgically. Exposes <code className="text-emerald-300 font-mono bg-black/45 px-1 rounded">window.AgentRuntime</code> with full state manipulation capabilities.
               </p>
@@ -1859,7 +1875,7 @@ export default function AgentBridge({
               }}
               className="bg-black/40 border border-white/5 rounded-lg p-3 space-y-2.5"
             >
-              <label className="text-[10px] uppercase font-bold text-slate-400 block tracking-wide">Enter Natural or Structured Command:</label>
+              <label className="text-[11px] font-semibold text-slate-300 block">Enter natural or structured command:</label>
               <div className="flex gap-2">
                 <input
                   type="text"
@@ -1870,7 +1886,7 @@ export default function AgentBridge({
                 />
                 <button
                   type="submit"
-                  className="px-3 bg-emerald-600 hover:bg-emerald-500 text-black font-bold uppercase rounded flex items-center justify-center transition-all cursor-pointer text-[10px]"
+                  className="px-3 bg-emerald-600 hover:bg-emerald-500 text-black font-semibold rounded flex items-center justify-center transition-all cursor-pointer text-[11px]"
                 >
                   <Play className="w-3" />
                 </button>
@@ -1879,9 +1895,9 @@ export default function AgentBridge({
 
             {/* Structured Presets */}
             <div className="bg-black/30 border border-white/5 rounded-lg p-3 space-y-2">
-              <span className="text-[9px] uppercase font-bold text-[#df9825] block tracking-wider">⚡ QUICK PRESETS (1-CLICK AGENT REPAIR):</span>
+              <span className="text-[11px] font-semibold text-amber-300 block">Quick presets (1-click agent repair):</span>
               
-              <div className="space-y-1.5 text-[10px]">
+              <div className="space-y-1.5 text-[11px]">
                 <button
                   type="button"
                   onClick={() => {
@@ -1893,10 +1909,10 @@ export default function AgentBridge({
                       { text: res.message, type: res.success ? 'success' : 'error' }
                     ]);
                   }}
-                  className="w-full text-left p-2 rounded bg-black/50 border border-[#df9825]/20 hover:bg-[#df9825]/10 text-slate-300 font-sans flex items-center justify-between group transition-all cursor-pointer"
+                  className="w-full text-left p-2 rounded bg-black/50 border border-amber-500/25 hover:bg-amber-500/10 text-slate-300 font-sans flex items-center justify-between group transition-all cursor-pointer"
                 >
                   <span>🔧 Resolve Threat-Monitor Build Warnings</span>
-                  <span className="text-[9px] font-mono text-[#df9825] opacity-80 uppercase font-bold tracking-wider group-hover:opacity-100">RUN MACRO →</span>
+                  <span className="text-[11px] font-mono text-amber-300 opacity-85 font-semibold group-hover:opacity-100">Run macro →</span>
                 </button>
 
                 <button
@@ -1910,10 +1926,10 @@ export default function AgentBridge({
                       { text: res.message, type: res.success ? 'success' : 'error' }
                     ]);
                   }}
-                  className="w-full text-left p-2 rounded bg-black/50 border border-cyan-500/10 hover:bg-cyan-500/10 text-slate-300 font-sans flex items-center justify-between group transition-all cursor-pointer"
+                  className="w-full text-left p-2 rounded bg-black/50 border border-sky-500/20 hover:bg-sky-500/10 text-slate-300 font-sans flex items-center justify-between group transition-all cursor-pointer"
                 >
                   <span>⚡ Instantiate Mission Cue ('MyMissionCue')</span>
-                  <span className="text-[9px] font-mono text-cyan-400 opacity-80 uppercase font-bold tracking-wider group-hover:opacity-100">RUN →</span>
+                  <span className="text-[11px] font-mono text-sky-400 opacity-85 font-semibold group-hover:opacity-100">Run →</span>
                 </button>
 
                 <button
@@ -1930,24 +1946,24 @@ export default function AgentBridge({
                   className="w-full text-left p-2 rounded bg-black/50 border border-purple-500/10 hover:bg-purple-500/10 text-slate-300 font-sans flex items-center justify-between group transition-all cursor-pointer"
                 >
                   <span>➕ Spawn Notification visual action node</span>
-                  <span className="text-[9px] font-mono text-purple-400 opacity-80 uppercase font-bold tracking-wider group-hover:opacity-100">SPAWN →</span>
+                  <span className="text-[11px] font-mono text-purple-300 opacity-85 font-semibold group-hover:opacity-100">Spawn →</span>
                 </button>
               </div>
             </div>
 
             {/* Execution Logger Console output */}
             <div className="bg-black/55 border border-white/10 rounded-lg overflow-hidden flex flex-col h-[200px]">
-              <div className="bg-slate-900 border-b border-white/5 px-3 py-1.5 flex items-center justify-between text-[9px] tracking-wide text-slate-400 shrink-0 select-none">
+              <div className="bg-slate-900 border-b border-white/5 px-3 py-1.5 flex items-center justify-between text-[11px] text-slate-400 shrink-0 select-none">
                 <span>SURGICAL CONSOLE LOGS</span>
                 <button
                   type="button"
                   onClick={() => setConsoleLogs([{ text: "Console logs cleared.", type: 'info' }])}
-                  className="hover:text-white uppercase transition-all cursor-pointer"
+                  className="hover:text-white transition-all cursor-pointer"
                 >
                   Clear Logs
                 </button>
               </div>
-              <div className="flex-1 p-3 overflow-y-auto space-y-1.5 text-[10px] leading-relaxed select-text font-mono">
+              <div className="flex-1 p-3 overflow-y-auto space-y-1.5 text-[11px] leading-relaxed select-text font-mono">
                 {consoleLogs.map((log, idx) => (
                   <div 
                     key={idx} 
@@ -1955,7 +1971,7 @@ export default function AgentBridge({
                       log.type === 'success' 
                         ? 'text-emerald-400' 
                         : log.type === 'error' 
-                        ? 'text-rose-450 font-bold' 
+                        ? 'text-rose-400 font-bold' 
                         : log.type === 'info' 
                         ? 'text-slate-400' 
                         : 'text-slate-300'
@@ -1968,8 +1984,8 @@ export default function AgentBridge({
             </div>
 
             {/* Supported Commands Syntax Manual card */}
-            <div className="bg-white/[0.01] border border-white/5 rounded-lg p-3 space-y-1 text-[9px] text-slate-500 uppercase tracking-widest leading-loose select-none">
-              <span className="font-bold text-slate-400 block mb-0.5">SYNTAX CHEAT SHEET:</span>
+            <div className="bg-white/[0.01] border border-white/5 rounded-lg p-3 space-y-1 text-[11px] text-slate-400 leading-relaxed select-none">
+              <span className="font-semibold text-slate-300 block mb-0.5">Syntax cheat sheet:</span>
               <p>• <code className="text-slate-300">updateWidget &lt;widget_id_or_label&gt; &lt;key&gt; &lt;val&gt;</code></p>
               <p>• <code className="text-slate-300">set &lt;key&gt; to &lt;val&gt; on widget &lt;widget_id_or_label&gt;</code></p>
               <p>• <code className="text-slate-300">updateNodeProperty &lt;node_id_or_name&gt; &lt;key&gt; &lt;val&gt;</code></p>
@@ -1981,7 +1997,7 @@ export default function AgentBridge({
       </div>
 
       {/* Footer copyright */}
-      <div className="bg-[#12161f] border-t border-white/5 p-3.5 text-center text-[10px] text-slate-500 font-mono">
+      <div className="bg-[#12161f] border-t border-white/5 p-3.5 text-center text-[11px] text-slate-400 font-mono">
         X4 Forge Developer Gateway
       </div>
       
